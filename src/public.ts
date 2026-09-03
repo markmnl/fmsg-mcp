@@ -1,7 +1,7 @@
 export { createFmsgMcpServer, SERVER_NAME } from "./server.js";
 export { createHttpServer, type HttpServerHandle } from "./http.js";
-export { loadConfig, type Config, type Transport } from "./config.js";
-export { StaticCallerProvider, type Caller, type CallerProvider } from "./context.js";
+export { loadConfig, type Config, type LoadConfigOptions, type Transport } from "./config.js";
+export { StaticCallerProvider, UnconfiguredCallerProvider, type Caller, type CallerProvider } from "./context.js";
 export { ApiKeyCallerProvider } from "./auth.js";
 export { waitForMessage, type WaitOptions, type WaitResult } from "./wait.js";
 export { assembleThread, renderThread, type AssembledThread } from "./thread.js";

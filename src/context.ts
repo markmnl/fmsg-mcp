@@ -26,6 +26,14 @@ export class StaticCallerProvider implements CallerProvider {
   }
 }
 
+/** stdio without credentials: the server starts (so hosts can list tools) but every tool explains what is missing. */
+export class UnconfiguredCallerProvider implements CallerProvider {
+  constructor(private readonly reason: string) {}
+  forRequest(): Promise<Caller> {
+    return Promise.reject(new Error(this.reason));
+  }
+}
+
 export async function callerFor(provider: CallerProvider, ctx: ServerContext): Promise<Caller> {
   return provider.forRequest(ctx.http?.authInfo);
 }

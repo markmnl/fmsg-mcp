@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
-import { ALICE, BOB, call, structured } from "./helpers.js";
+import { ALICE, BOB, call, structured, text } from "./helpers.js";
 
 const entry = path.resolve("dist/index.js");
 
@@ -27,6 +27,22 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
   afterAll(async () => {
     await client.close();
     await fake.stop();
+  });
+
+  it("starts without credentials, lists tools and explains what is missing", async () => {
+    const bare = new Client({ name: "stdio-bare", version: "0.0.0" });
+    const env = { ...process.env } as Record<string, string>;
+    delete env.FMSG_API_URL;
+    delete env.FMSG_API_KEY;
+    await bare.connect(new StdioClientTransport({ command: process.execPath, args: [entry], env, stderr: "pipe" }));
+    try {
+      expect((await bare.listTools()).tools.length).toBe(14);
+      const r = await call(bare, "whoami");
+      expect(r.isError).toBe(true);
+      expect(text(r)).toContain("FMSG_API_URL and FMSG_API_KEY");
+    } finally {
+      await bare.close();
+    }
   });
 
   it("lists tools and answers whoami over a real child process", async () => {

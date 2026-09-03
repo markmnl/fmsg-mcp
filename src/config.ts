@@ -68,13 +68,30 @@ function loadDirectory(path: string): Record<string, string> {
 
 export type ConfigOverrides = { host?: string; port?: number };
 
-export function loadConfig(env: NodeJS.ProcessEnv, transport: Transport, overrides: ConfigOverrides = {}): Config {
-  const apiUrl = env.FMSG_API_URL?.trim();
-  if (!apiUrl) throw new Error("FMSG_API_URL is required (base URL of the fmsg Web API, e.g. https://api.example.com)");
-  if (!/^https?:\/\//u.test(apiUrl)) throw new Error("FMSG_API_URL must start with http:// or https://");
+export type LoadConfigOptions = {
+  /**
+   * stdio only: when false, a missing FMSG_API_URL / FMSG_API_KEY does not throw and
+   * `apiUrl` is left empty, so the server can still start and answer introspection
+   * (tools/list etc.). Tools then fail with a configuration hint when called.
+   */
+  requireCredentials?: boolean;
+};
+
+export function loadConfig(
+  env: NodeJS.ProcessEnv,
+  transport: Transport,
+  overrides: ConfigOverrides = {},
+  options: LoadConfigOptions = {},
+): Config {
+  const requireCredentials = options.requireCredentials ?? true;
+  const apiUrl = env.FMSG_API_URL?.trim() ?? "";
+  if (!apiUrl && (transport === "http" || requireCredentials)) {
+    throw new Error("FMSG_API_URL is required (base URL of the fmsg Web API, e.g. https://api.example.com)");
+  }
+  if (apiUrl && !/^https?:\/\//u.test(apiUrl)) throw new Error("FMSG_API_URL must start with http:// or https://");
 
   const apiKey = env.FMSG_API_KEY?.trim();
-  if (transport === "stdio" && !apiKey) {
+  if (transport === "stdio" && !apiKey && requireCredentials) {
     throw new Error("FMSG_API_KEY is required in stdio mode (an fmsgk_... key for the address this server sends as)");
   }
   if (transport === "http" && apiKey) {

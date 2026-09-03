@@ -120,6 +120,8 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 
 The API key is exchanged for a short-lived access token that the server renews automatically.
 
+Over stdio the server also starts with no credentials at all, so hosts and directories can list its tools; every tool call then returns a message naming the missing variables.
+
 ## Safety
 
 - Sent messages cannot be edited or recalled; send tools say so in their descriptions and are

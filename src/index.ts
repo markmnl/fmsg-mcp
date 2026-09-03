@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { FmsgClient } from "./client/client.js";
 import { loadConfig, DEFAULT_HTTP_PORT, type ConfigOverrides } from "./config.js";
-import { StaticCallerProvider } from "./context.js";
+import { type CallerProvider, StaticCallerProvider, UnconfiguredCallerProvider } from "./context.js";
 import { createHttpServer, MCP_PATH } from "./http.js";
 import { createFmsgMcpServer } from "./server.js";
 import { PACKAGE_NAME, VERSION } from "./version.js";
@@ -82,18 +82,25 @@ async function main(): Promise<void> {
   const transport = args.mode;
   let config;
   try {
-    config = loadConfig(process.env, transport, args.overrides);
+    config = loadConfig(process.env, transport, args.overrides, { requireCredentials: false });
   } catch (error) {
     console.error(`fmsg-mcp: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(2);
   }
 
   if (transport === "stdio") {
-    const client = new FmsgClient(config.apiUrl, config.apiKey!);
-    const provider = new StaticCallerProvider(client);
     const cfg = config;
+    let provider: CallerProvider;
+    if (cfg.apiUrl && cfg.apiKey) {
+      provider = new StaticCallerProvider(new FmsgClient(cfg.apiUrl, cfg.apiKey));
+      console.error(`fmsg-mcp ${VERSION} serving stdio for ${cfg.apiUrl}`);
+    } else {
+      const missing = [!cfg.apiUrl && "FMSG_API_URL", !cfg.apiKey && "FMSG_API_KEY"].filter(Boolean).join(" and ");
+      const reason = `fmsg-mcp is not configured: set ${missing} (the fmsg Web API base URL and an fmsgk_... API key for the address this server sends as)`;
+      provider = new UnconfiguredCallerProvider(reason);
+      console.error(`fmsg-mcp ${VERSION} serving stdio WITHOUT credentials (${missing} not set): tools are listed but every call will fail until configured`);
+    }
     const handle = serveStdio(() => createFmsgMcpServer(provider, cfg));
-    console.error(`fmsg-mcp ${VERSION} serving stdio for ${config.apiUrl}`);
     const stop = () => void handle.close().finally(() => process.exit(0));
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);

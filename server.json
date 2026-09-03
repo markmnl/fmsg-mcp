@@ -6,18 +6,33 @@
     "url": "https://github.com/markmnl/fmsg-mcp",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@markmnl/fmsg-mcp",
-      "version": "0.1.0",
-      "transport": { "type": "stdio" },
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      },
       "environmentVariables": [
-        { "name": "FMSG_API_URL", "description": "Base URL of the fmsg Web API", "isRequired": true },
-        { "name": "FMSG_API_KEY", "description": "fmsg API key (fmsgk_...) for the address to send as", "isRequired": true, "isSecret": true },
-        { "name": "FMSG_DEFAULT_DOMAIN", "description": "Optional: lets short names resolve to @name@<domain>", "isRequired": false }
+        {
+          "name": "FMSG_API_URL",
+          "description": "Base URL of the fmsg Web API",
+          "isRequired": true
+        },
+        {
+          "name": "FMSG_API_KEY",
+          "description": "fmsg API key (fmsgk_...) for the address to send as",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "FMSG_DEFAULT_DOMAIN",
+          "description": "Optional: lets short names resolve to @name@<domain>",
+          "isRequired": false
+        }
       ]
     }
   ]
