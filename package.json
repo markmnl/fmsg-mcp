@@ -24,7 +24,7 @@
     "node": ">=22"
   },
   "bin": {
-    "fmsg-mcp": "./dist/index.js"
+    "fmsg-mcp": "dist/index.js"
   },
   "main": "./dist/public.js",
   "types": "./dist/public.d.ts",
