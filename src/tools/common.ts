@@ -1,6 +1,6 @@
 import type { CallToolResult, McpServer, ServerContext, ToolAnnotations } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import type { FmsgMessage } from "../client/types.js";
+import type { FmsgMessage, RecipientDelivery } from "../client/types.js";
 import type { Config } from "../config.js";
 import { type Caller, type CallerProvider, callerFor } from "../context.js";
 import { describeError, toolError } from "../errors.js";
@@ -68,11 +68,11 @@ export function toItem(m: FmsgMessage, self: string): MessageItem {
 
 export function deliveryOf(m: FmsgMessage): z.infer<typeof deliveryItem>[] {
   const out: z.infer<typeof deliveryItem>[] = [];
-  const push = (addr: string, entry: { time?: number | null; code?: number | null } | undefined, via: "to" | "add_to") => {
-    const code = entry?.code ?? null;
-    const time = entry?.time ?? null;
-    const status = time !== null && (code === null || code === 0) ? "delivered" : code !== null && code !== 0 ? "failed" : "pending";
-    out.push({ addr, status, time: isoTime(time), code, via });
+  const push = (addr: string, entry: RecipientDelivery | undefined, via: "to" | "add_to") => {
+    const time = entry?.time_delivered ?? null;
+    const code = entry?.response_code ?? null;
+    const status = time !== null ? "delivered" : code !== null ? "failed" : "pending";
+    out.push({ addr, status, time, code, via });
   };
   m.to.forEach((addr, i) => push(addr, m.to_delivery?.[i], "to"));
   for (const batch of m.add_to ?? []) (batch.to ?? []).forEach((addr, i) => push(addr, batch.to_delivery?.[i], "add_to"));

@@ -1,9 +1,11 @@
 /** Wire types for the fmsg Web API (FMSG-003). Ids are decimal strings. */
 
 export type RecipientDelivery = {
-  addr?: string;
-  time?: number | null;
-  code?: number | null;
+  addr: string;
+  /** RFC3339 UTC; null until delivered. */
+  time_delivered: string | null;
+  /** The receiving host's response code for the last delivery attempt; null if none yet. */
+  response_code: number | null;
 };
 
 export type AddToBatch = {

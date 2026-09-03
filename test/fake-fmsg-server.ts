@@ -13,8 +13,8 @@ export type StoredMessage = {
   pid: string | null;
   from: string;
   to: string[];
-  to_delivery: Array<{ addr: string; time: number | null; code: number | null }>;
-  add_to: Array<{ batch_id: string; add_to_from: string; to: string[]; to_delivery: Array<{ addr: string; time: number | null; code: number | null }>; time: number }>;
+  to_delivery: Array<{ addr: string; time_delivered: string | null; response_code: number | null }>;
+  add_to: Array<{ batch_id: string; add_to_from: string; to: string[]; to_delivery: Array<{ addr: string; time_delivered: string | null; response_code: number | null }>; time: number }>;
   time: number | null;
   topic: string;
   type: string;
@@ -147,7 +147,7 @@ export class FakeFmsgServer {
       pid: input.pid ?? null,
       from: input.from,
       to: input.to,
-      to_delivery: input.to.map((addr) => ({ addr, time: sent === null ? null : sent + 1, code: sent === null ? null : 0 })),
+      to_delivery: input.to.map((addr) => ({ addr, time_delivered: sent === null ? null : new Date((sent + 1) * 1000).toISOString(), response_code: sent === null ? null : 200 })),
       add_to: [],
       time: sent,
       topic: input.topic ?? "",
@@ -367,7 +367,7 @@ export class FakeFmsgServer {
       if (!m.type) problems.push("no type");
       if (problems.length) return this.json(res, 400, { error: `message is not sendable: ${problems.join("; ")}` });
       m.time = this.now();
-      m.to_delivery = m.to.map((addr) => ({ addr, time: m.time! + 1, code: 0 }));
+      m.to_delivery = m.to.map((addr) => ({ addr, time_delivered: new Date((m.time! + 1) * 1000).toISOString(), response_code: 200 }));
       this.push(m);
       return this.json(res, 200, { id: m.id, time: m.time });
     }
@@ -387,7 +387,7 @@ export class FakeFmsgServer {
       const existing = this.participants(m);
       if (add.some((a) => existing.has(a))) return this.json(res, 400, { error: "recipient already added" });
       const t = this.now();
-      m.add_to.push({ batch_id: String(this.nextId++), add_to_from: subject, to: add, to_delivery: add.map((addr) => ({ addr, time: t + 1, code: 0 })), time: t });
+      m.add_to.push({ batch_id: String(this.nextId++), add_to_from: subject, to: add, to_delivery: add.map((addr) => ({ addr, time_delivered: new Date((t + 1) * 1000).toISOString(), response_code: 200 })), time: t });
       for (const addr of add) for (const ws of this.sockets.get(addr) ?? []) ws.send(this.encode({ type: "new_msg", data: this.listItem(m, addr) }));
       return this.json(res, 200, { id: m.id, added: add.length });
     }
