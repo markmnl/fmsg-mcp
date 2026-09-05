@@ -96,6 +96,48 @@ describe("waitForMessage", () => {
     expect(r2.note).toBe("cancelled");
   });
 
+  it("lists other-thread skips and still returns the in-thread match with the cursor advanced", async () => {
+    const root = fake.seed({ from: BOB, to: [ALICE], topic: "A", data: "a" });
+    const p = waitForMessage(client, ALICE, opts({ threadOf: root.id }));
+    await sleep(300);
+    const other = fake.seed({ from: CAROL, to: [ALICE], topic: "B", data: "elsewhere" });
+    fake.push(other);
+    await sleep(100);
+    const inThread = fake.seed({ from: BOB, to: [ALICE], pid: root.id, data: "here" });
+    fake.push(inThread);
+    const r = await p;
+    expect(r.status).toBe("message");
+    expect(r.messages.map((m) => m.id)).toEqual([inThread.id]);
+    expect(r.skipped).toEqual([{ id: other.id, reason: "other_thread" }]);
+    expect(r.unclassified).toEqual([]);
+    expect(r.after_id).toBe(inThread.id);
+  });
+
+  it("never advances the cursor past a message whose thread it could not determine", async () => {
+    const root = fake.seed({ from: BOB, to: [ALICE], topic: "A", data: "a" });
+    const p = waitForMessage(client, ALICE, opts({ threadOf: root.id, timeoutMs: 3000 }));
+    await sleep(300);
+    // The host announces the message before it is readable: pushed, not stored.
+    const ghost = fake.seed({ from: BOB, to: [ALICE], pid: root.id, data: "announced early" });
+    fake.messages.delete(ghost.id);
+    fake.push(ghost);
+    await sleep(100);
+    const later = fake.seed({ from: BOB, to: [ALICE], pid: root.id, data: "after the gap" });
+    fake.push(later);
+    const r = await p;
+    expect(r.unclassified.map((u) => u.id)).toEqual([ghost.id]);
+    expect(BigInt(r.after_id) < BigInt(ghost.id)).toBe(true);
+    expect(r.note).toContain("cursor held");
+
+    // Once readable, a wait from the held cursor delivers both in order.
+    fake.messages.set(ghost.id, ghost);
+    const r2 = await waitForMessage(client, ALICE, opts({ threadOf: root.id, afterId: r.after_id, settleMs: 500 }));
+    expect(r2.status).toBe("message");
+    expect(r2.messages.map((m) => m.id)).toEqual([ghost.id, later.id]);
+    expect(r2.after_id).toBe(later.id);
+    expect(r2.unclassified).toEqual([]);
+  });
+
   it("falls back to polling when the socket cannot open", async () => {
     const p = waitForMessage(client, ALICE, opts({ pollIntervalMs: 100 }), undefined, {
       openSocket: async () => {

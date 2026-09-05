@@ -1,6 +1,6 @@
 import type WebSocket from "ws";
 import { FmsgClient } from "./client/client.js";
-import { compareMessageIds, maxMessageId } from "./client/message-id.js";
+import { compareMessageIds, maxMessageId, minMessageId } from "./client/message-id.js";
 import type { FmsgMessage } from "./client/types.js";
 import { openFmsgWebSocket, parseWsEvent } from "./client/ws.js";
 
@@ -21,6 +21,9 @@ export type WaitOptions = {
 };
 
 export type Pending = { id: string; from: string; root_id: string | null };
+export type SkipReason = "own" | "reaction" | "no_reply" | "from_mismatch" | "other_thread";
+export type Skipped = { id: string; reason: SkipReason };
+export type Unclassified = { id: string; from: string; error: string };
 
 export type WaitResult = {
   status: "message" | "timeout";
@@ -28,6 +31,10 @@ export type WaitResult = {
   thread_root_id: string | null;
   messages: FmsgMessage[];
   pending_other_threads: Pending[];
+  /** Messages deliberately passed over (the cursor advances past these). */
+  skipped: Skipped[];
+  /** Messages whose thread could not be determined; the cursor never advances past these. */
+  unclassified: Unclassified[];
   transport: "websocket" | "poll";
   note: string | null;
 };
@@ -60,44 +67,67 @@ export async function waitForMessage(
   }
   let skippedMax = floor;
 
-  const rootCache = new Map<string, string | null>();
-  const rootOf = async (id: string): Promise<string | null> => {
-    if (rootCache.has(id)) return rootCache.get(id)!;
-    let root: string | null = null;
+  let finished = false;
+  const rootCache = new Map<string, string>();
+  const lookupRoot = async (id: string): Promise<string> => {
     try {
-      root = (await client.getThreadMessages(id, signal)).root_id;
-    } catch {
-      // Fall back to a bounded pid walk.
+      return (await client.getThreadMessages(id, signal)).root_id;
+    } catch (error) {
+      // Fall back to a bounded pid walk; any failure here propagates as "unknown".
+      let cur = id;
+      for (let i = 0; i < 100; i++) {
+        const m = await client.getMessage(cur, signal);
+        if (!m.pid) return m.id;
+        cur = m.pid;
+      }
+      throw error;
+    }
+  };
+  /**
+   * Resolve a message's thread root. A lookup can fail transiently (the host's
+   * WebSocket announces a message slightly before it is readable), so retry a
+   * few times; if it still fails, throw rather than guess: a message whose
+   * thread is unknown must never be mistaken for one on another thread.
+   */
+  const rootOf = async (id: string, attempts = 3): Promise<string> => {
+    const cached = rootCache.get(id);
+    if (cached !== undefined) return cached;
+    let lastError: unknown;
+    for (let i = 0; i < attempts; i++) {
+      if (signal?.aborted || finished) break;
       try {
-        let cur = id;
-        for (let i = 0; i < 100; i++) {
-          const m = await client.getMessage(cur, signal);
-          if (!m.pid) {
-            root = m.id;
-            break;
-          }
-          cur = m.pid;
-        }
-      } catch {
-        root = null;
+        const root = await lookupRoot(id);
+        rootCache.set(id, root);
+        return root;
+      } catch (error) {
+        lastError = error;
+        if (i + 1 < attempts) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
       }
     }
-    rootCache.set(id, root);
-    return root;
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   };
-  const targetRoot = options.threadOf ? await rootOf(options.threadOf) : undefined;
-  if (options.threadOf && targetRoot === null) throw new Error(`could not determine the thread of message ${options.threadOf}`);
+  let targetRoot: string | undefined;
+  if (options.threadOf) {
+    try {
+      targetRoot = await rootOf(options.threadOf, 1);
+    } catch {
+      throw new Error(`could not determine the thread of message ${options.threadOf}`);
+    }
+  }
 
   const seen = new Set<string>();
   const batch: FmsgMessage[] = [];
   const pending: Pending[] = [];
+  const skipped: Skipped[] = [];
+  const unclassified: Unclassified[] = [];
+  /** Messages whose thread lookup is still running; if the call ends first they count as unclassified. */
+  const inflight = new Map<string, string>();
   let batchRoot: string | null = null;
   let transport: WaitResult["transport"] = "websocket";
   let note: string | null = null;
   let socket: WebSocket | undefined;
   let pollTimer: NodeJS.Timeout | undefined;
   let settleTimer: NodeJS.Timeout | undefined;
-  let finished = false;
 
   return new Promise<WaitResult>((resolve, reject) => {
     const cleanup = () => {
@@ -119,13 +149,27 @@ export async function waitForMessage(
     const finish = () => {
       if (finished) return;
       cleanup();
+      for (const [id, from] of inflight) unclassified.push({ id, from, error: "thread lookup did not complete before the call returned" });
+      inflight.clear();
       const ids = batch.map((m) => m.id);
+      // The cursor advances only over messages returned or deliberately skipped,
+      // and never past a message whose thread could not be determined.
+      let afterId = maxMessageId([...ids, skippedMax, floor])!;
+      const firstUnknown = unclassified.length ? minMessageId(unclassified.map((u) => u.id))! : undefined;
+      if (firstUnknown !== undefined && compareMessageIds(afterId, firstUnknown) >= 0) {
+        const before = (BigInt(firstUnknown) - 1n).toString();
+        afterId = compareMessageIds(before, floor) > 0 ? before : floor;
+        const held = `cursor held at ${afterId}: could not determine the thread of ${unclassified.map((u) => u.id).join(", ")}; call again to retry`;
+        note = note ? `${note}; ${held}` : held;
+      }
       resolve({
         status: batch.length ? "message" : "timeout",
-        after_id: batch.length ? maxMessageId(ids)! : skippedMax,
+        after_id: afterId,
         thread_root_id: batchRoot,
         messages: [...batch].sort((a, b) => compareMessageIds(a.id, b.id)),
         pending_other_threads: pending,
+        skipped: [...skipped].sort((a, b) => compareMessageIds(a.id, b.id)),
+        unclassified: [...unclassified].sort((a, b) => compareMessageIds(a.id, b.id)),
         transport,
         note,
       });
@@ -152,21 +196,26 @@ export async function waitForMessage(
       if (finished || seen.has(m.id)) return;
       seen.add(m.id);
       if (compareMessageIds(m.id, floor) <= 0) return;
-      const disqualified =
-        m.from.toLowerCase() === me ||
-        (m.reaction !== null && m.reaction !== undefined) ||
-        m.no_reply === true ||
-        (wantFrom !== undefined && m.from.toLowerCase() !== wantFrom);
-      if (disqualified) {
+      const skip = (reason: SkipReason) => {
+        skipped.push({ id: m.id, reason });
         if (compareMessageIds(m.id, skippedMax) > 0) skippedMax = m.id;
+      };
+      if (m.from.toLowerCase() === me) return skip("own");
+      if (m.reaction !== null && m.reaction !== undefined) return skip("reaction");
+      if (m.no_reply === true) return skip("no_reply");
+      if (wantFrom !== undefined && m.from.toLowerCase() !== wantFrom) return skip("from_mismatch");
+      let root: string;
+      inflight.set(m.id, m.from);
+      try {
+        root = await rootOf(m.id);
+      } catch (error) {
+        if (!finished) unclassified.push({ id: m.id, from: m.from, error: error instanceof Error ? error.message : String(error) });
         return;
+      } finally {
+        inflight.delete(m.id);
       }
-      const root = await rootOf(m.id);
       if (finished) return;
-      if (targetRoot !== undefined && root !== targetRoot) {
-        if (compareMessageIds(m.id, skippedMax) > 0) skippedMax = m.id;
-        return;
-      }
+      if (targetRoot !== undefined && root !== targetRoot) return skip("other_thread");
       if (batch.length === 0) {
         batchRoot = root;
         batch.push(m);
