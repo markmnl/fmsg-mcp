@@ -1,5 +1,5 @@
 import * as z from "zod/v4";
-import { resolveAddresses } from "../address.js";
+import { resolveAddresses, sameAddress } from "../address.js";
 import { redactSecrets } from "../client/redact.js";
 import type { OutboundAttachment } from "../client/types.js";
 import { toolError } from "../errors.js";
@@ -121,7 +121,7 @@ export const registerSendTools: Register = (server, deps) => {
         const warnings: string[] = [];
         const to = recipients?.length
           ? resolveAddresses(recipients, deps.config)
-          : participantsOf(parent).filter((a) => a !== caller.address.toLowerCase());
+          : participantsOf(parent).filter((a) => !sameAddress(a, caller.address));
         if (to.length === 0) return toolError(`message ${id} has no other participants to reply to; pass recipients`);
         const rb = redactSecrets(body);
         const sent = await caller.client.send({

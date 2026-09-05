@@ -76,6 +76,7 @@ export class FakeFmsgServer {
     ["fmsgk_alice_secret", "@alice@example.com"],
     ["fmsgk_bob_secret", "@bob@example.net"],
     ["fmsgk_carol_secret", "@carol@example.org"],
+    ["fmsgk_agent_secret", "@Alice_ChatGPT@example.com"],
   ]);
   /** Fail the next request whose path matches, with this status and message. */
   failNext: { match: RegExp; status: number; error: string; code?: string } | undefined;

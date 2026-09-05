@@ -1,7 +1,7 @@
 {
   "name": "@markmnl/fmsg-mcp",
   "mcpName": "io.github.markmnl/fmsg-mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "MCP server for fmsg: send and receive federated messages from any AI agent via a deployed fmsg Web API",
   "type": "module",
   "license": "MIT",

@@ -35,14 +35,18 @@ export function participantsOf(message: {
   to?: string[];
   add_to?: Array<{ add_to_from?: string; to?: string[] }>;
 }): string[] {
-  const set = new Set<string>();
-  if (message.from) set.add(message.from.toLowerCase());
-  for (const addr of message.to ?? []) set.add(addr.toLowerCase());
+  // Addresses keep their case (the wire may be case-sensitive); dedupe case-insensitively.
+  const seen = new Map<string, string>();
+  const add = (addr?: string) => {
+    if (addr && !seen.has(addr.toLowerCase())) seen.set(addr.toLowerCase(), addr);
+  };
+  add(message.from);
+  for (const addr of message.to ?? []) add(addr);
   for (const batch of message.add_to ?? []) {
-    if (batch.add_to_from) set.add(batch.add_to_from.toLowerCase());
-    for (const addr of batch.to ?? []) set.add(addr.toLowerCase());
+    add(batch.add_to_from);
+    for (const addr of batch.to ?? []) add(addr);
   }
-  return [...set];
+  return [...seen.values()];
 }
 
 export function preview(message: FmsgMessage, maxChars = 200): string {

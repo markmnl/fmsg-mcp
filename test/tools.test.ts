@@ -43,7 +43,7 @@ describe("tools (stdio-shaped)", () => {
     expect(who.transport).toBe("stdio");
     expect(who.default_domain).toBe("example.net");
     expect(structured(await call(h.client, "resolve_address", { name: "bob" }))).toEqual({ address: BOB, resolution: "default_domain" });
-    expect(structured(await call(h.client, "resolve_address", { name: "@X@Example.ORG" }))).toEqual({ address: "@x@example.org", resolution: "literal" });
+    expect(structured(await call(h.client, "resolve_address", { name: "@X@Example.ORG" }))).toEqual({ address: "@X@example.org", resolution: "literal" });
     const bad = await call(h.client, "resolve_address", { name: "not an address" });
     expect(bad.isError).toBe(true);
   });
@@ -132,9 +132,9 @@ describe("tools (stdio-shaped)", () => {
 
   it("reply defaults to reply-all and enforces terminal / no-reply", async () => {
     const root = fake.seed({ from: BOB, to: [ALICE, CAROL], topic: "t", data: "root" });
-    root.add_to.push({ batch_id: "5000", add_to_from: BOB, to: ["@dave@example.org"], to_delivery: [], time: 1 });
+    root.add_to.push({ batch_id: "5000", add_to_from: BOB, to: ["@Dave@example.org"], to_delivery: [], time: 1 });
     const r = structured<{ to: string[]; parent_id: string }>(await call(h.client, "reply", { id: root.id, body: "hi all" }));
-    expect(r.to.sort()).toEqual([BOB, CAROL, "@dave@example.org"].sort());
+    expect(r.to.sort()).toEqual([BOB, CAROL, "@Dave@example.org"].sort());   // self excluded case-insensitively, case kept
     expect(r.parent_id).toBe(root.id);
     const narrowed = structured<{ to: string[] }>(await call(h.client, "reply", { id: root.id, body: "just bob", recipients: [BOB] }));
     expect(narrowed.to).toEqual([BOB]);

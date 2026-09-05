@@ -1,3 +1,4 @@
+import { sameAddress } from "./address.js";
 import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import type { FmsgMessage, Thread, ThreadMessage } from "./client/types.js";
 import { DATA_NOT_INSTRUCTIONS, fence, isoTime, participantsOf, truncateUtf8, truncationNote } from "./render.js";
@@ -158,7 +159,7 @@ export async function assembleThread(
   signal?: AbortSignal,
 ): Promise<AssembledThread> {
   const trigger = await client.getMessage(triggerId, signal);
-  const participants = participantsOf(trigger).filter((a) => a !== self.toLowerCase());
+  const participants = participantsOf(trigger).filter((a) => !sameAddress(a, self));
   try {
     const thread = await client.getThreadMessages(triggerId, signal);
     const { messages, omitted } = await fromThreadMessages(client, thread, caps, signal);

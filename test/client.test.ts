@@ -95,6 +95,13 @@ describe("FmsgClient", () => {
     expect(drafts.every((d) => d.deleted)).toBe(true);
   });
 
+  it("keeps the token's address case so from matches the authenticated user", async () => {
+    const agent = new FmsgClient(fake.baseUrl, "fmsgk_agent_secret");
+    expect(await agent.address()).toBe("@Alice_ChatGPT@example.com");
+    const sent = await agent.send({ to: [BOB], topic: "case", body: "hi" });
+    expect(fake.messages.get(sent.id)!.from).toBe("@Alice_ChatGPT@example.com");
+  });
+
   it("refuses replies to terminal messages with the host's 409", async () => {
     const parent = fake.seed({ from: BOB, to: [ALICE], data: "x", terminal: true });
     await expect(client.send({ to: [BOB], pid: parent.id, body: "no" })).rejects.toMatchObject({ status: 409 });

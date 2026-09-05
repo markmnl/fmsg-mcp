@@ -1,11 +1,21 @@
 const ADDRESS = /^@([^@\s/]+)@([^@\s/]+)$/u;
 
-/** Normalise an fmsg address to `@user@domain` (lower-cased). Returns undefined when malformed. */
+/**
+ * Validate an fmsg address and normalise it to `@user@domain`. The user part keeps
+ * its case: the Web API compares `from` to the token's address byte for byte, and
+ * hosts may treat user names case-sensitively. Only the domain is lower-cased.
+ * Returns undefined when malformed.
+ */
 export function normalizeFmsgAddress(value: string): string | undefined {
   const trimmed = value.trim();
   const match = ADDRESS.exec(trimmed);
   if (!match) return undefined;
-  return `@${match[1]!.toLowerCase()}@${match[2]!.toLowerCase()}`;
+  return `@${match[1]!}@${match[2]!.toLowerCase()}`;
+}
+
+/** Case-insensitive address equality. */
+export function sameAddress(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 export function isFmsgAddress(value: string): boolean {
@@ -42,7 +52,7 @@ export function resolveAddress(name: string, resolver: AddressResolver = {}): Re
     }
   }
   if (resolver.defaultDomain) {
-    const address = normalizeFmsgAddress(`@${key}@${resolver.defaultDomain}`);
+    const address = normalizeFmsgAddress(`@${trimmed}@${resolver.defaultDomain}`);
     if (address) return { address, resolution: "default_domain" };
   }
   throw new Error(
@@ -54,7 +64,7 @@ export function resolveAddresses(names: string[], resolver: AddressResolver = {}
   const out: string[] = [];
   for (const name of names) {
     const { address } = resolveAddress(name, resolver);
-    if (!out.includes(address)) out.push(address);
+    if (!out.some((existing) => sameAddress(existing, address))) out.push(address);
   }
   return out;
 }
