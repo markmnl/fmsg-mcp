@@ -36,6 +36,12 @@ export const registerWaitTools: Register = (server, deps) => {
         reply_target_id: z.string().nullable().describe("newest message of the batch; reply to this one"),
         messages: z.array(messageItem.extend({ body: z.string().nullable() })),
         pending_other_threads: z.array(z.object({ id: z.string(), from: z.string(), root_id: z.string().nullable() })),
+        skipped: z.array(z.object({ id: z.string(), reason: z.enum(["own", "reaction", "no_reply", "from_mismatch", "other_thread"]) })).describe(
+          "messages deliberately passed over; after_id has advanced past them",
+        ),
+        unclassified: z.array(z.object({ id: z.string(), from: z.string(), error: z.string() })).describe(
+          "messages whose thread could not be determined; after_id is held before them, call again to retry",
+        ),
         transport: z.enum(["websocket", "poll"]),
         note: z.string().nullable(),
       }),
@@ -76,6 +82,8 @@ export const registerWaitTools: Register = (server, deps) => {
           reply_target_id: newest?.id ?? null,
           messages,
           pending_other_threads: result.pending_other_threads,
+          skipped: result.skipped,
+          unclassified: result.unclassified,
           transport: result.transport,
           note: result.note,
         };
@@ -91,6 +99,9 @@ export const registerWaitTools: Register = (server, deps) => {
         ];
         if (result.pending_other_threads.length) {
           lines.push(`Also waiting on other threads: ${result.pending_other_threads.map((p) => `${p.id} from ${p.from}`).join(", ")}`);
+        }
+        if (result.unclassified.length) {
+          lines.push(`Could not classify ${result.unclassified.map((u) => `${u.id} from ${u.from}`).join(", ")}; after_id is held before them, call again to retry.`);
         }
         if (result.note) lines.push(`Note: ${result.note}`);
         if (include_thread && newest) {

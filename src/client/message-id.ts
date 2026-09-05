@@ -31,6 +31,12 @@ export function compareMessageIds(a: string, b: string): number {
   return x < y ? -1 : x > y ? 1 : 0;
 }
 
+export function minMessageId(ids: Iterable<string>): string | undefined {
+  let best: string | undefined;
+  for (const id of ids) if (best === undefined || compareMessageIds(id, best) < 0) best = id;
+  return best;
+}
+
 export function maxMessageId(ids: Iterable<string>): string | undefined {
   let best: string | undefined;
   for (const id of ids) if (best === undefined || compareMessageIds(id, best) > 0) best = id;
