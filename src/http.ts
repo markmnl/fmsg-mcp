@@ -67,7 +67,9 @@ export type HttpServerHandle = { server: Server; close: () => Promise<void>; pro
 
 export function createHttpServer(config: Config, log: (line: string) => void = (l) => console.error(l)): HttpServerHandle {
   const provider = new ApiKeyCallerProvider(config, log);
-  const handler = createMcpHandler(() => createFmsgMcpServer(provider, config));
+  const handler = createMcpHandler(({ authInfo }) =>
+    createFmsgMcpServer(provider, config, authInfo?.clientId ? { address: authInfo.clientId } : {}),
+  );
   const gate = requireBearerAuth({ verifier: provider, requiredScopes: [FMSG_SCOPE] });
 
   const allowedHosts = config.http.allowedHosts.length

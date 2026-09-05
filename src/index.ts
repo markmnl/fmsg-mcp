@@ -100,7 +100,17 @@ async function main(): Promise<void> {
       provider = new UnconfiguredCallerProvider(reason);
       console.error(`fmsg-mcp ${VERSION} serving stdio WITHOUT credentials (${missing} not set): tools are listed but every call will fail until configured`);
     }
-    const handle = serveStdio(() => createFmsgMcpServer(provider, cfg));
+    // Resolve the address once so the instructions can name it; never let a slow
+    // or unreachable host hold up initialize.
+    const knownAddress = async (): Promise<string | undefined> => {
+      if (!cfg.apiUrl || !cfg.apiKey) return undefined;
+      const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000).unref());
+      return Promise.race([provider.forRequest(undefined).then((c) => c.address), timeout]).catch(() => undefined);
+    };
+    const handle = serveStdio(async () => {
+      const address = await knownAddress();
+      return createFmsgMcpServer(provider, cfg, address ? { address } : {});
+    });
     const stop = () => void handle.close().finally(() => process.exit(0));
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);

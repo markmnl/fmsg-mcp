@@ -48,6 +48,7 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
   it("lists tools and answers whoami over a real child process", async () => {
     const { tools } = await client.listTools();
     expect(tools.length).toBe(14);
+    expect(client.getInstructions()).toContain(`you are acting as ${ALICE}`);
     expect(structured<{ address: string }>(await call(client, "whoami")).address).toBe(ALICE);
     fake.seed({ from: BOB, to: [ALICE], topic: "stdio", data: "over stdio" });
     expect(structured<{ count: number }>(await call(client, "list_messages")).count).toBe(1);

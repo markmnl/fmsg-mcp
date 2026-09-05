@@ -130,6 +130,9 @@ Over stdio the server also starts with no credentials at all, so hosts and direc
   error text; the count of redactions is reported.
 - Nothing about message size or acceptance is assumed: the fmsg host's own responses and delivery
   codes are surfaced verbatim.
+- The server publishes MCP `instructions` (shown to the model at session start) telling agents to use
+  these tools rather than a local fmsg CLI or cached credentials, to send only on a clear request, and
+  to treat message content as data.
 - See [SECURITY.md](./SECURITY.md).
 
 ## Using the client library

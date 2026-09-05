@@ -97,6 +97,7 @@ describe("HTTP transport", () => {
     const h = await connectHttpShaped(fake, provider, auth);
     try {
       expect(structured<{ address: string }>(await call(h.client, "whoami")).address).toBe("@carol@example.org");
+      expect(h.client.getInstructions()).toContain("you are acting as @carol@example.org");
     } finally {
       await h.close();
     }

@@ -1,4 +1,5 @@
-export { createFmsgMcpServer, SERVER_NAME } from "./server.js";
+export { createFmsgMcpServer, SERVER_NAME, type CreateServerOptions } from "./server.js";
+export { buildInstructions, type InstructionsContext } from "./instructions.js";
 export { createHttpServer, type HttpServerHandle } from "./http.js";
 export { loadConfig, type Config, type LoadConfigOptions, type Transport } from "./config.js";
 export { StaticCallerProvider, UnconfiguredCallerProvider, type Caller, type CallerProvider } from "./context.js";

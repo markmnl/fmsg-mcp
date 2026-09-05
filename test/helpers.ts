@@ -47,7 +47,9 @@ export async function connectHttpShaped(
   authInfo: AuthInfo | undefined,
   config = configFor(fake, "http"),
 ): Promise<Harness & { handler: McpHttpHandler }> {
-  const handler = createMcpHandler(() => createFmsgMcpServer(provider, config));
+  const handler = createMcpHandler(({ authInfo: a }) =>
+    createFmsgMcpServer(provider, config, a?.clientId ? { address: a.clientId } : {}),
+  );
   const transport = new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
     fetch: (url, init) => handler.fetch(new Request(url, init), { authInfo }),
   });
