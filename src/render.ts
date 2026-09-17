@@ -106,7 +106,8 @@ export function messageHeader(message: FmsgMessage): string {
 }
 
 export function fence(body: string): string {
-  const longest = Math.max(2, ...[...body.matchAll(/`+/gu)].map((m) => m[0].length));
+  let longest = 2;
+  for (const match of body.matchAll(/`+/gu)) longest = Math.max(longest, match[0].length);
   const ticks = "`".repeat(longest + 1);
   return `${ticks}\n${body}\n${ticks}`;
 }

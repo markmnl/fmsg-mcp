@@ -308,6 +308,9 @@ export class FmsgClient {
   /** Caller owns the stream and must consume or cancel it. */
   async streamAttachment(id: string, filename: string, signal?: AbortSignal): Promise<{ stream: ReadableStream<Uint8Array>; contentType?: string }> {
     const mid = normalizeMessageId(id);
+    if (!filename || filename === "." || filename === ".." || /[/\\\u0000]/u.test(filename)) {
+      throw new Error("use an attachment filename without directory components");
+    }
     const response = await this.request(
       `/fmsg/${encodeURIComponent(mid)}/attach/${encodeURIComponent(filename)}`,
       { signal },

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FmsgClient, FmsgHttpError } from "../src/client/client.js";
 import { parseFmsgJson, stringifyWithIds, normalizeMessageId } from "../src/client/message-id.js";
 import { redactSecrets } from "../src/client/redact.js";
+import { fence } from "../src/render.js";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
 import { ALICE, BOB } from "./helpers.js";
 
@@ -18,12 +19,20 @@ describe("message ids", () => {
   });
 });
 
-describe("redaction", () => {
+describe("content safety", () => {
   it("replaces keys and JWTs and counts them", () => {
     const r = redactSecrets("key fmsgk_abcdefghijkl_0123456789 and token eyJhbGciOi.eyJzdWIiOiJ4In0.c2lnbmF0dXJl end");
     expect(r.text).not.toContain("fmsgk_abc");
     expect(r.text).not.toContain("eyJ");
     expect(r.count).toBe(2);
+  });
+
+  it("frames large text with many backtick runs without exceeding the argument limit", () => {
+    const body = "text`".repeat(150000) + "\n````";
+    const framed = fence(body);
+    expect(framed.slice(0, 6)).toBe("`````\n");
+    expect(framed.slice(-6)).toBe("\n`````");
+    expect(framed.slice(6, -6) === body).toBe(true);
   });
 });
 
@@ -56,6 +65,13 @@ describe("FmsgClient", () => {
     await expect(client.getMessage("42")).rejects.toMatchObject({ status: 404, name: "FmsgHttpError" });
     const bad = new FmsgClient(fake.baseUrl, "fmsgk_nope");
     await expect(bad.address()).rejects.toBeInstanceOf(FmsgHttpError);
+  });
+
+  it("rejects attachment path components before making an upstream request", async () => {
+    for (const filename of ["", ".", "..", "../note.txt", "folder/note.txt", "folder\\note.txt", "bad\u0000name"]) {
+      await expect(client.streamAttachment("1", filename)).rejects.toThrow("filename without directory components");
+    }
+    expect(fake.requests).toHaveLength(0);
   });
 
   it("bounds proxy error previews while streaming and preserves host policy JSON", async () => {
