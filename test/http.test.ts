@@ -57,9 +57,11 @@ describe("HTTP transport", () => {
     expect(notKey.status).toBe(401);
   });
 
-  it("releases the caller lease when middleware rejects an expired upstream token", async () => {
-    fake.tokenTtlSeconds = -1;
-    const verify = vi.spyOn(http.provider, "verifyAccessToken");
+  it("releases the caller lease when middleware rejects expired authentication", async () => {
+    const originalVerify = http.provider.verifyAccessToken.bind(http.provider);
+    const verify = vi.spyOn(http.provider, "verifyAccessToken").mockImplementation(async token => ({
+      ...await originalVerify(token), expiresAt: Math.floor(Date.now() / 1000) - 1,
+    }));
     try {
       const response = await fetch(`${base}/mcp`, {
         method: "POST",

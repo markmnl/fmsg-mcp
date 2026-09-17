@@ -11,7 +11,8 @@ The canonical contract is the fmsg-webapi README and
 `src/client/` is written against it directly. Key facts:
 
 - `POST /fmsg/token` exchanges an `fmsgk_…` API key for a short-lived JWT whose `sub` is the address.
-  The client refreshes it 5 minutes before expiry and retries once on 401.
+  The client also accepts a caller-bound `TokenProvider` (see `docs/token-providers.md`). It renews
+  5 minutes before expiry, capped at half the acquired lifetime, and retries once on 401.
 - `id`/`pid` are int64 JSON numbers. They are decimal **strings** everywhere in this codebase; only
   `src/client/message-id.ts` converts at the JSON boundary (reviver with `context.source`).
 - Sending is draft → attach → send; the draft is deleted if a later step fails.

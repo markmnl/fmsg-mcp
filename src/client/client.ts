@@ -3,6 +3,8 @@ import { normalizeMessageId, parseFmsgJson, stringifyWithIds } from "./message-i
 import { redactSecrets } from "./redact.js";
 import { normalizeApiUrl } from "./url.js";
 import { readBytes, withIdleTimeout } from "./stream.js";
+import { FmsgHttpError, readError } from "./errors.js";
+import { ApiKeyTokenProvider, type TokenProvider } from "./token-provider.js";
 import type {
   AccessToken,
   Attachment,
@@ -13,11 +15,13 @@ import type {
   Thread,
 } from "./types.js";
 
+export { FmsgHttpError } from "./errors.js";
+
 export type FetchLike = typeof fetch;
 
 export type FmsgClientOptions = {
   fetch?: FetchLike;
-  /** Refresh the access token this long before it expires (default 5 minutes). */
+  /** Refresh margin (default 5 minutes), capped at half the token's remaining lifetime on acquisition. */
   refreshMarginMs?: number;
   /** Per-request timeout; attachment streams use separate header/idle budgets (default 60 s). */
   timeoutMs?: number;
@@ -25,137 +29,122 @@ export type FmsgClientOptions = {
   allowInsecureHttp?: boolean;
 };
 
-/** An HTTP error from the fmsg Web API, with the status and the host's own error text. */
-export class FmsgHttpError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly method: string,
-    readonly path: string,
-    /** Machine-readable `code` from the body, when the host sends one (thread routes). */
-    readonly code?: string,
-  ) {
-    super(redactSecrets(message).text);
-    if (this.code) this.code = redactSecrets(this.code).text;
-    this.method = redactSecrets(method).text;
-    this.path = redactSecrets(path).text;
-    this.name = "FmsgHttpError";
-  }
-}
-
-function decodeJwtPayload(token: string): Record<string, unknown> {
-  const parts = token.split(".");
-  if (parts.length !== 3 || !parts[1]) throw new Error("token exchange returned an invalid JWT");
-  try {
-    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
-  } catch {
-    throw new Error("token exchange returned an unreadable JWT payload");
-  }
-}
-
-async function readError(response: Response): Promise<{ message: string; code?: string }> {
-  // Preserve canonical 400/413 JSON policy details. Other errors, including
-  // proxy pages, get a bounded preview independent of message acceptance limits.
-  const isJson = (response.headers.get("content-type") ?? "").toLowerCase().includes("json");
-  let raw: string;
-  if (!isJson || ![400, 413].includes(response.status)) {
-    const { data, truncated } = await readBytes(response.body, 2048, true);
-    raw = Buffer.from(data).toString("utf8");
-    if (!isJson || truncated) return { message: (raw || `HTTP ${response.status}`) + (truncated ? "\n[upstream response truncated at 2048 bytes]" : "") };
-  } else raw = await response.text();
-  if (!raw) return { message: `HTTP ${response.status}` };
-  try {
-    const parsed = JSON.parse(raw) as { error?: unknown; code?: unknown };
-    const message = typeof parsed.error === "string" ? parsed.error : `HTTP ${response.status}`;
-    return typeof parsed.code === "string" ? { message, code: parsed.code } : { message };
-  } catch {
-    return { message: Buffer.byteLength(raw) > 2048 ? Buffer.from(raw).subarray(0, 2048).toString("utf8") + "\n[upstream response truncated at 2048 bytes]" : raw };
-  }
-}
-
 function withId(message: FmsgMessage, id: string): FmsgMessage {
   return { ...message, id, terminal: message.terminal === true, reaction: message.reaction ?? null, reactions: message.reactions ?? [] };
 }
 
+type TokenRenewal = { promise: Promise<AccessToken>; abort: AbortController; waiters: number };
+
+/** Detach one waiter without cancelling work another caller still needs. */
+function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => { signal.removeEventListener("abort", onAbort); reject(signal.reason); };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    // Always observe the operation, including a provider that ignores cancellation.
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 /**
- * Client for the fmsg Web API (FMSG-003). Exchanges an `fmsgk_` API key for a
- * short-lived JWT, refreshes it ahead of expiry, and retries once on 401.
+ * Client for the fmsg Web API (FMSG-003). Accepts an API key or a caller-bound
+ * token provider, renews tokens ahead of expiry, and retries once on 401.
  */
 export class FmsgClient {
   readonly apiUrl: string;
   private token?: AccessToken;
-  private tokenPromise?: Promise<AccessToken>;
+  private renewal?: TokenRenewal;
+  private provider?: TokenProvider;
+  private boundAddress?: string;
+  private refreshAtMs = 0;
   private readonly lifetime = new AbortController();
 
   constructor(
     apiUrl: string,
-    private apiKey: string,
+    credentials: string | TokenProvider,
     private readonly options: FmsgClientOptions = {},
   ) {
     this.apiUrl = normalizeApiUrl(apiUrl, options.allowInsecureHttp);
-    if (!apiKey.startsWith("fmsgk_")) throw new Error("fmsg API key must start with fmsgk_");
+    if (options.refreshMarginMs !== undefined && (!Number.isFinite(options.refreshMarginMs) || options.refreshMarginMs < 0)) {
+      throw new Error("refreshMarginMs must be a finite non-negative number");
+    }
+    this.provider = typeof credentials === "string" ? new ApiKeyTokenProvider(credentials, this.fetchImpl) : credentials;
+    if (!this.provider || typeof this.provider.getToken !== "function") throw new Error("a token provider must implement getToken");
   }
 
   private get fetchImpl(): FetchLike {
     return this.options.fetch ?? fetch;
   }
 
-  /** The address this client acts as (from the JWT `sub`), exchanging the key if needed. */
-  async address(): Promise<string> {
-    return (await this.getToken()).address;
+  /** The provider's authenticated address, pinned for this client's lifetime. */
+  async address(signal?: AbortSignal): Promise<string> {
+    return (await this.getToken(false, signal)).address;
   }
 
-  async getToken(force = false): Promise<AccessToken> {
+  async getToken(force = false, signal?: AbortSignal): Promise<AccessToken> {
+    signal?.throwIfAborted();
     this.lifetime.signal.throwIfAborted();
-    const margin = this.options.refreshMarginMs ?? 300_000;
-    if (this.tokenPromise) return this.tokenPromise;
-    if (!force && this.token && this.token.expiresAtMs - margin > Date.now()) return this.token;
-    this.tokenPromise = this.exchangeToken();
+    if (!this.renewal && !force && this.token && this.refreshAtMs > Date.now()) return this.token;
+    const renewal = this.renewal ?? this.startRenewal(force);
+    renewal.waiters++;
     try {
-      this.token = await this.tokenPromise;
-      this.lifetime.signal.throwIfAborted();
-      return this.token;
-    } catch (error) {
-      this.token = undefined;
-      throw error;
+      return await withAbort(renewal.promise, signal);
     } finally {
-      this.tokenPromise = undefined;
+      renewal.waiters--;
+      if (!renewal.waiters && this.renewal === renewal) {
+        this.renewal = undefined;
+        renewal.abort.abort();
+      }
     }
+  }
+
+  private startRenewal(forceRefresh: boolean): TokenRenewal {
+    const provider = this.provider!;
+    const renewal: TokenRenewal = { promise: undefined!, abort: new AbortController(), waiters: 0 };
+    this.renewal = renewal;
+    this.token = undefined;
+    const signal = AbortSignal.any([this.lifetime.signal, renewal.abort.signal]);
+    const timer = setTimeout(() => renewal.abort.abort(new DOMException("token renewal timed out", "TimeoutError")), this.options.timeoutMs ?? 60_000).unref();
+    const acquiring = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return provider.getToken({ apiUrl: this.apiUrl, signal, forceRefresh });
+    });
+    renewal.promise = withAbort(acquiring, signal).then(value => {
+      signal.throwIfAborted();
+      const address = typeof value?.address === "string" ? normalizeFmsgAddress(value.address) : undefined;
+      if (!address) throw new Error("token provider returned an invalid fmsg address");
+      if (typeof value.accessToken !== "string" || !/^[A-Za-z0-9._~+\/-]+=*$/u.test(value.accessToken) || value.accessToken.startsWith("fmsgk_")) {
+        throw new Error("token provider must return a Web API bearer access token");
+      }
+      const now = Date.now();
+      if (!Number.isFinite(value.expiresAtMs) || value.expiresAtMs <= now) throw new Error("token provider returned an invalid or expired token lifetime");
+      if (this.boundAddress !== undefined && address !== this.boundAddress) throw new Error("token provider changed the authenticated address; create a new client for a different identity");
+      this.boundAddress = address;
+      const token = Object.freeze({ accessToken: value.accessToken, address, expiresAtMs: value.expiresAtMs });
+      this.refreshAtMs = token.expiresAtMs - Math.min(this.options.refreshMarginMs ?? 300_000, (token.expiresAtMs - now) / 2);
+      this.token = token;
+      return token;
+    }).finally(() => {
+      clearTimeout(timer);
+      if (this.renewal === renewal) this.renewal = undefined;
+    });
+    return renewal;
   }
 
   /** Release credentials and cancel outstanding work when the client is no longer used. */
   close(): void {
+    if (this.lifetime.signal.aborted) return;
     this.lifetime.abort();
-    this.apiKey = "";
     this.token = undefined;
-  }
-
-  private async exchangeToken(): Promise<AccessToken> {
-    const response = await this.fetchImpl(`${this.apiUrl}/fmsg/token`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${this.apiKey}` },
-      redirect: "error",
-      signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(this.options.timeoutMs ?? 60_000)]),
-    });
-    if (!response.ok) {
-      const { message, code } = await readError(response);
-      throw new FmsgHttpError(`token exchange failed: ${message}`, response.status, "POST", "/fmsg/token", code);
-    }
-    const body = (await response.json()) as { access_token?: unknown; expires_in?: unknown; expires_at?: unknown };
-    if (typeof body.access_token !== "string") throw new Error("token response has no access_token");
-    const payload = decodeJwtPayload(body.access_token);
-    const address = typeof payload.sub === "string" ? normalizeFmsgAddress(payload.sub) : undefined;
-    if (!address) throw new Error("token JWT sub is not an fmsg address");
-    const fromResponse = typeof body.expires_at === "string" ? Date.parse(body.expires_at) : Number.NaN;
-    const fromJwt = typeof payload.exp === "number" ? payload.exp * 1000 : Number.NaN;
-    const fromIn = typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1000 : Number.NaN;
-    const expiresAtMs = [fromResponse, fromJwt, fromIn].find(Number.isFinite) ?? Date.now() + 3_600_000;
-    return { accessToken: body.access_token, address, expiresAtMs };
+    const provider = this.provider;
+    this.provider = undefined;
+    provider?.close?.();
   }
 
   private async request(path: string, init: RequestInit = {}, retry401 = true, streaming = false): Promise<Response> {
     init.signal?.throwIfAborted();
-    const token = await this.getToken();
+    const token = await this.getToken(false, init.signal ?? undefined);
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${token.accessToken}`);
     const headerDeadline = new AbortController();
@@ -167,7 +156,10 @@ export class FmsgClient {
       const response = await this.fetchImpl(`${this.apiUrl}${path}`, { ...init, headers, signal, redirect: "error" });
       if (response.status === 401 && retry401) {
         await response.body?.cancel();
-        await this.getToken(true);
+        // A slower 401 may refer to a token another request already renewed.
+        if (!this.token || this.token === token || this.token.expiresAtMs <= Date.now()) {
+          await this.getToken(true, init.signal ?? undefined);
+        }
         return this.request(path, init, false, streaming);
       }
       if (!response.ok) {
@@ -376,7 +368,7 @@ export class FmsgClient {
   async send(input: SendInput): Promise<SendResult> {
     if (input.to.length === 0) throw new Error("at least one recipient is required");
     if (input.pid && input.topic) throw new Error("a reply (pid) cannot carry a topic");
-    const from = await this.address();
+    const from = await this.address(input.signal);
     const body = redactSecrets(input.body);
     const topic = redactSecrets(input.pid ? "" : (input.topic ?? ""));
     const draftId = await this.createDraft({ ...input, body: body.text, topic: topic.text }, from);

@@ -1,11 +1,11 @@
 import type { AuthInfo, ServerContext } from "@modelcontextprotocol/server";
 import { FmsgClient } from "./client/client.js";
 
-/** A resolved caller: the client bound to one API key and the address it acts as. */
+/** A resolved caller: the client bound to one authorization grant and the address it acts as. */
 export type Caller = {
   client: FmsgClient;
   address: string;
-  /** When the key's exchanged token expires (ms since epoch), for whoami. */
+  /** When the current Web API access token expires (ms since epoch), for whoami. */
   tokenExpiresAt: () => Promise<number>;
 };
 

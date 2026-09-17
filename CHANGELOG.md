@@ -19,6 +19,10 @@ This is the next planned release; publication still happens through a `v0.2.0` G
 
 ### Fixes and improvements
 
+- Accept caller-bound `TokenProvider` implementations in the client library alongside API keys.
+  Share renewal across concurrent requests, pin the address, bound acquisition time, and propagate
+  cancellation. Cap early renewal for short-lived tokens and reuse renewal after late 401 responses.
+  This is the OAuth foundation; hosted OAuth remains separate integration work.
 - Retry protected reads when a WebSocket announces a message before it is readable. If retries run
   out, schedule a delayed inbox catch-up without requiring another push. Fix pre-cancelled waits
   and preserve request deadlines.
