@@ -57,6 +57,24 @@ describe("HTTP transport", () => {
     expect(notKey.status).toBe(401);
   });
 
+  it("releases the caller lease when middleware rejects an expired upstream token", async () => {
+    fake.tokenTtlSeconds = -1;
+    const verify = vi.spyOn(http.provider, "verifyAccessToken");
+    try {
+      const response = await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer fmsgk_alice_secret" },
+        body: "{}",
+      });
+      expect(response.status).toBe(401);
+      await response.body?.cancel();
+      const auth = await verify.mock.results[0]!.value;
+      await vi.waitFor(async () => {
+        await expect(http.provider.forRequest(auth)).rejects.toThrow("not authenticated");
+      });
+    } finally { verify.mockRestore(); }
+  });
+
   it("rejects a foreign Host header on a loopback bind", async () => {
     // fetch() forbids overriding Host, so use node:http directly.
     const status = await new Promise<number>((resolve, reject) => {

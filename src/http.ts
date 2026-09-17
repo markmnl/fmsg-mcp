@@ -92,7 +92,6 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     createFmsgMcpServer(provider, config, authInfo?.clientId ? { address: authInfo.clientId } : {}),
     { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
   );
-  const gate = requireBearerAuth({ verifier: provider, requiredScopes: [FMSG_SCOPE] });
   const active = new Set<AbortController>();
 
   const server = createServer((req, res) => {
@@ -145,9 +144,17 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
         res.setHeader("access-control-allow-headers", CORS_HEADERS.join(", "));
         return sendWebResponse(res, new Response(null, { status: 204 }));
       }
+      // Capture the lease before middleware's expiry/scope checks, so finally also
+      // releases requests rejected after the upstream identity was verified.
+      const gate = requireBearerAuth({
+        verifier: { verifyAccessToken: async (token) => {
+          authenticated = await provider.verifyAccessToken(token);
+          return authenticated;
+        } },
+        requiredScopes: [FMSG_SCOPE],
+      });
       const auth = await gate(request);
       if (auth instanceof Response) return sendWebResponse(res, auth);
-      authenticated = auth;
       return sendWebResponse(res, await handler.fetch(request, { authInfo: auth }));
     })().catch((error) => {
       safeLog(`request failed: ${error instanceof Error ? error.message : String(error)}`);
