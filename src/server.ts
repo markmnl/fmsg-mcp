@@ -10,6 +10,7 @@ import { registerListTools } from "./tools/list.js";
 import { registerReadTools } from "./tools/read.js";
 import { registerSendTools } from "./tools/send.js";
 import { registerWaitTools } from "./tools/wait.js";
+import { registerSaveTool } from "./tools/save.js";
 import { VERSION } from "./version.js";
 
 export const SERVER_NAME = "fmsg";
@@ -33,6 +34,7 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   registerIdentityTools(server, deps);
   registerListTools(server, deps);
   registerReadTools(server, deps);
+  registerSaveTool(server, deps);
   registerSendTools(server, deps);
   registerWaitTools(server, deps);
   registerResources(server, deps);

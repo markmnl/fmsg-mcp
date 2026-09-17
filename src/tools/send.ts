@@ -1,12 +1,11 @@
 import * as z from "zod/v4";
 import { resolveAddresses, sameAddress } from "../address.js";
-import { redactSecrets } from "../client/redact.js";
 import type { OutboundAttachment } from "../client/types.js";
 import { toolError } from "../errors.js";
 import { isoTime, participantsOf } from "../render.js";
 import { READ_ONLY, SENDS, type Register, idSchema, ok, withCaller } from "./common.js";
 
-const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled, so only send when the user has clearly asked to.";
+const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
 const attachmentInput = z.object({
   filename: z.string().regex(/^[A-Za-z0-9._-]+$/u, "letters, digits, dot, underscore, hyphen only"),
@@ -59,12 +58,10 @@ export const registerSendTools: Register = (server, deps) => {
     async ({ to, topic, body, type, important, no_reply, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const recipients = resolveAddresses(to, deps.config);
-        const rb = redactSecrets(body);
-        const rt = redactSecrets(topic);
         const sent = await caller.client.send({
           to: recipients,
-          topic: rt.text,
-          body: rb.text,
+          topic,
+          body,
           type,
           important,
           noReply: no_reply,
@@ -76,13 +73,13 @@ export const registerSendTools: Register = (server, deps) => {
           time: isoTime(sent.time),
           from: caller.address,
           to: recipients,
-          topic: rt.text,
+          topic: sent.topic,
           parent_id: null,
           attachments: sent.attachments,
-          redactions: rb.count + rt.count,
+          redactions: sent.redactions,
           warnings: [] as string[],
         };
-        const text = `Sent message ${sent.id} "${rt.text}" to ${recipients.join(", ")} at ${structured.time ?? "?"}` +
+        const text = `Sent message ${sent.id} "${sent.topic}" to ${recipients.join(", ")} at ${structured.time ?? "?"}` +
           (sent.attachments.length ? ` with ${sent.attachments.map((a) => a.filename).join(", ")}` : "") +
           (structured.redactions ? `. ${structured.redactions} secret(s) were redacted before sending.` : ".");
         return ok(text, structured);
@@ -123,11 +120,10 @@ export const registerSendTools: Register = (server, deps) => {
           ? resolveAddresses(recipients, deps.config)
           : participantsOf(parent).filter((a) => !sameAddress(a, caller.address));
         if (to.length === 0) return toolError(`message ${id} has no other participants to reply to; pass recipients`);
-        const rb = redactSecrets(body);
         const sent = await caller.client.send({
           to,
           pid: parent.id,
-          body: rb.text,
+          body,
           type,
           important,
           noReply: no_reply,
@@ -142,7 +138,7 @@ export const registerSendTools: Register = (server, deps) => {
           topic: "",
           parent_id: parent.id,
           attachments: sent.attachments,
-          redactions: rb.count,
+          redactions: sent.redactions,
           warnings,
         };
         const text = `Sent reply ${sent.id} to message ${parent.id} for ${to.join(", ")} at ${structured.time ?? "?"}` +
@@ -185,7 +181,7 @@ export const registerSendTools: Register = (server, deps) => {
         emoji: z.string().max(32).nullable().describe("a single emoji; null or empty clears your reaction"),
       }),
       outputSchema: z.object({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
     },
     async ({ id, emoji }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {

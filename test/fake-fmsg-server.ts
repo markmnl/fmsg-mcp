@@ -4,6 +4,7 @@
  * attachments, thread/messages, thread text and the event WebSocket.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -39,9 +40,9 @@ export type LoggedRequest = { method: string; path: string; body?: unknown; rawB
 
 const ID_FIELDS = /"(id|pid|batch_id|root_id|trigger_id)":"([0-9]+)"/gu;
 
-function jwt(sub: string, expSeconds: number): string {
+function jwt(sub: string, expSeconds: number, keyId: string): string {
   const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  return `${enc({ alg: "none", typ: "JWT" })}.${enc({ sub, exp: expSeconds, iss: "fake" })}.sig`;
+  return `${enc({ alg: "none", typ: "JWT" })}.${enc({ sub, exp: expSeconds, iss: "fake", api_key_id: keyId })}.sig`;
 }
 
 function subjectOf(token: string | undefined): string | undefined {
@@ -78,6 +79,7 @@ export class FakeFmsgServer {
     ["fmsgk_carol_secret", "@carol@example.org"],
     ["fmsgk_agent_secret", "@Alice_ChatGPT@example.com"],
   ]);
+  private readonly tokenKeys = new Map<string, string>();
   /** Fail the next request whose path matches, with this status and message. */
   failNext: { match: RegExp; status: number; error: string; code?: string } | undefined;
   /** Force the next protected request to answer 401 (expired JWT simulation). */
@@ -95,7 +97,7 @@ export class FakeFmsgServer {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (url.pathname !== "/fmsg/ws") return socket.destroy();
       const bearer = req.headers.authorization?.replace(/^Bearer\s+/iu, "");
-      const subject = subjectOf(bearer ?? url.searchParams.get("access_token") ?? undefined);
+      const subject = this.authenticatedSubject(bearer ?? url.searchParams.get("access_token") ?? undefined);
       if (!subject) {
         socket.write("HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\n\r\n{\"error\":\"unauthorized\"}");
         return socket.destroy();
@@ -252,6 +254,12 @@ export class FakeFmsgServer {
     res.end(this.encode(value));
   }
 
+  private authenticatedSubject(token: string | undefined): string | undefined {
+    const subject = subjectOf(token);
+    const key = token ? this.tokenKeys.get(token) : undefined;
+    return subject && key && this.apiKeys.get(key) === subject ? subject : undefined;
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -271,15 +279,17 @@ export class FakeFmsgServer {
       const subject = key ? this.apiKeys.get(key) : undefined;
       if (!subject) return this.json(res, 401, { error: "invalid API key" });
       const exp = Math.floor(Date.now() / 1000) + this.tokenTtlSeconds;
+      const token = jwt(subject, exp, createHash("sha256").update(key!).digest("hex"));
+      this.tokenKeys.set(token, key!);
       return this.json(res, 200, {
-        access_token: jwt(subject, exp),
+        access_token: token,
         token_type: "Bearer",
         expires_in: this.tokenTtlSeconds,
         expires_at: new Date(exp * 1000).toISOString(),
       });
     }
 
-    const subject = subjectOf(req.headers.authorization?.replace(/^Bearer\s+/iu, ""));
+    const subject = this.authenticatedSubject(req.headers.authorization?.replace(/^Bearer\s+/iu, ""));
     if (!subject) {
       await readBody(req);
       return this.json(res, 401, { error: "missing or invalid token" });

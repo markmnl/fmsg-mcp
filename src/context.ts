@@ -12,6 +12,8 @@ export type Caller = {
 /** Supplies the caller for a request: a fixed one over stdio, per bearer key over HTTP. */
 export interface CallerProvider {
   forRequest(authInfo: AuthInfo | undefined): Promise<Caller>;
+  invalidate?(caller: Caller): void;
+  close?(): void;
 }
 
 export class StaticCallerProvider implements CallerProvider {
@@ -21,12 +23,19 @@ export class StaticCallerProvider implements CallerProvider {
     this.caller ??= (async () => {
       const address = await this.client.address();
       return { client: this.client, address, tokenExpiresAt: async () => (await this.client.getToken()).expiresAtMs };
-    })();
+    })().catch((error) => {
+      this.caller = undefined;
+      throw error;
+    });
     return this.caller;
+  }
+  close(): void {
+    this.client.close();
+    this.caller = undefined;
   }
 }
 
-/** stdio without credentials: the server starts (so hosts can list tools) but every tool explains what is missing. */
+/** Invalid/missing stdio configuration: allow discovery, then explain the configuration fix on tool calls. */
 export class UnconfiguredCallerProvider implements CallerProvider {
   constructor(private readonly reason: string) {}
   forRequest(): Promise<Caller> {

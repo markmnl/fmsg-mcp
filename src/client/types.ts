@@ -127,6 +127,10 @@ export type SendResult = {
   id: string;
   time: number | null;
   attachments: Attachment[];
+  /** Selected secret patterns replaced in the outgoing body and topic. */
+  redactions: number;
+  /** Topic actually sent, after redaction; empty for replies. */
+  topic: string;
 };
 
 export type ReactResult = {

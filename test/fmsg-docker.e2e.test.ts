@@ -21,13 +21,15 @@ function env(name: string): string {
 }
 
 async function connect(apiUrl: string, apiKey: string): Promise<{ client: Client; close: () => Promise<void> }> {
-  const config = loadConfig({ FMSG_API_URL: apiUrl, FMSG_API_KEY: apiKey }, "stdio");
-  const server = createFmsgMcpServer(new StaticCallerProvider(new FmsgClient(apiUrl, apiKey)), config);
+  // The isolated Docker fixture exposes a private HTTP network.
+  const config = loadConfig({ FMSG_API_URL: apiUrl, FMSG_API_KEY: apiKey, FMSG_ALLOW_INSECURE_HTTP: "1" }, "stdio");
+  const upstream = new FmsgClient(apiUrl, apiKey, { allowInsecureHttp: true });
+  const server = createFmsgMcpServer(new StaticCallerProvider(upstream), config);
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "e2e", version: "0.0.0" });
   await server.connect(st);
   await client.connect(ct);
-  return { client, close: async () => { await client.close(); await server.close(); } };
+  return { client, close: async () => { upstream.close(); await client.close(); await server.close(); } };
 }
 
 describe.skipIf(!enabled)("fmsg-docker end to end", () => {
@@ -78,7 +80,8 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
 
     const dl = await call(bob.client, "download_attachment", { id: bobCopy, filename: "note.txt" });
     expect(dl.isError).toBeFalsy();
-    expect(dl.content.some((c) => c.type === "resource")).toBe(true);
+    expect(text(dl)).toContain(`attachment ${token}`);
+    expect(dl.content.every((c) => c.type === "text")).toBe(true);
 
     const aliceWaiting = call(alice.client, "wait_for_message", { timeout_seconds: 120, settle_seconds: 1 });
     await new Promise((r) => setTimeout(r, 1500));
@@ -102,7 +105,7 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
   });
 
   it("serves HTTP mode with the caller's own key as bearer", async () => {
-    const config = loadConfig({ FMSG_API_URL: env("FMSG_E2E_ALICE_API_URL") }, "http");
+    const config = loadConfig({ FMSG_API_URL: env("FMSG_E2E_ALICE_API_URL"), FMSG_ALLOW_INSECURE_HTTP: "1" }, "http");
     const http: HttpServerHandle = createHttpServer(config, () => undefined);
     await new Promise<void>((r) => http.server.listen(0, "127.0.0.1", r));
     const port = (http.server.address() as AddressInfo).port;
@@ -117,5 +120,34 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
       await client.close();
       await http.close();
     }
+  });
+
+  it("preserves real upstream message, thread and attachment isolation on one host", async () => {
+    const privateText = `private-to-alice ${token}`;
+    const sent = structured<{ id: string }>(await call(bob.client, "send_message", {
+      to: [ALICE], topic: "upstream isolation check", body: privateText,
+      attachments: [{ filename: "private.txt", data_base64: Buffer.from(privateText).toString("base64"), content_type: "text/plain" }],
+    }));
+    const carol = await connect(env("FMSG_E2E_BOB_API_URL"), env("FMSG_E2E_CAROL_API_KEY"));
+    try {
+      expect(structured<{ address: string }>(await call(carol.client, "whoami")).address).toBe(CAROL);
+      expect(text(await call(bob.client, "get_message", { id: sent.id }))).toContain(privateText);
+      const attempts: Array<[string, Record<string, unknown>]> = [
+        ["get_message", { id: sent.id }], ["get_thread", { id: sent.id }],
+        ["download_attachment", { id: sent.id, filename: "private.txt" }],
+        ["reply", { id: sent.id, body: "must be denied" }],
+        ["react", { id: sent.id, emoji: "👍" }],
+        ["add_recipients", { id: sent.id, add_to: [CAROL] }],
+      ];
+      for (const [name, args] of attempts) {
+        const result = await call(carol.client, name, args);
+        expect(result.isError, name).toBe(true);
+        expect(text(result), name).toMatch(/HTTP (403|404)/u);
+        expect(JSON.stringify(result), name).not.toContain(privateText);
+      }
+      for (const kind of ["message", "thread"]) {
+        await expect(carol.client.readResource({ uri: `fmsg://${kind}/${sent.id}` })).rejects.toThrow();
+      }
+    } finally { await carol.close(); }
   });
 });

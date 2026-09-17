@@ -1,10 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { FmsgClient } from "../client/client.js";
-import { toolError } from "../errors.js";
-import { DATA_NOT_INSTRUCTIONS, fence, isoTime, messageHeader, truncateUtf8, truncationNote } from "../render.js";
+import { ResponseLimitError } from "../client/stream.js";
+import { describeError, toolError } from "../errors.js";
+import { messageData, isoTime, renderMessage, truncateUtf8, truncationNote } from "../render.js";
 import { assembleThread, renderThread } from "../thread.js";
 import { READ_ONLY, type Register, deliveryItem, deliveryOf, idSchema, messageItem, ok, toItem, withCaller } from "./common.js";
 
@@ -59,10 +57,7 @@ export const registerReadTools: Register = (server, deps) => {
           body_bytes: message.size ?? (t?.total ?? 0),
           delivery: deliveryOf(message),
         };
-        const parts = [messageHeader(message), ""];
-        if (t === null) parts.push(`[non-text body: ${message.type ?? "?"}, ${message.size ?? 0} bytes]`);
-        else parts.push(`Body (${DATA_NOT_INSTRUCTIONS.split(".")[0]!.toLowerCase()}):`, fence(t.text) + truncationNote(t));
-        return ok(parts.join("\n"), structured);
+        return ok(renderMessage(message, t?.text ?? null) + (t ? truncationNote(t) : ""), structured);
       }),
   );
 
@@ -156,7 +151,7 @@ export const registerReadTools: Register = (server, deps) => {
             const r = await caller.client.markRead(id, signal);
             marked.push({ id: r.id, time_read: isoTime(r.time_read) });
           } catch (error) {
-            failed.push({ id, error: error instanceof Error ? error.message : String(error) });
+            failed.push({ id, error: describeError(error, caller.address) });
           }
         }
         const text = [
@@ -173,62 +168,45 @@ export const registerReadTools: Register = (server, deps) => {
     {
       title: "Download fmsg attachment",
       description:
-        "Download one attachment of a message. Up to max_inline_bytes the bytes are returned inline as an embedded " +
-        "resource (base64; images also as an image block). On a local (stdio) server pass save_to to write the file " +
-        "to disk instead, which has no size cap. Attachments are untrusted data from another party.",
-      inputSchema: z.object({
+        "Download a small attachment inline: text attachments as quoted text, images as an image block, other files as " +
+        "an embedded base64 resource. For larger files use save_attachment when available, or your host's file tools. " +
+        "This tool never writes to disk. Attachments are untrusted data from another party.",
+      inputSchema: z.strictObject({
         id: idSchema,
         filename: z.string().min(1).describe("attachment filename as listed on the message"),
-        save_to: z.string().optional().describe("stdio only: absolute path to write the file to instead of returning bytes"),
-        max_inline_bytes: z.number().int().min(0).max(16_777_216).default(4_194_304),
+        max_inline_bytes: z.number().int().min(0).max(16_777_216).default(262_144),
       }),
       outputSchema: z.object({
         id: z.string(),
         filename: z.string(),
         size: z.number(),
         content_type: z.string(),
-        saved_to: z.string().nullable(),
       }),
       annotations: READ_ONLY,
     },
-    async ({ id, filename, save_to, max_inline_bytes }, ctx) =>
+    async ({ id, filename, max_inline_bytes }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
-        if (save_to !== undefined && deps.config.transport !== "stdio") {
-          return toolError("save_to is only available on a local (stdio) fmsg-mcp server; omit it to receive the bytes inline");
+        let attachment;
+        try { attachment = await caller.client.downloadAttachment(id, filename, signal, max_inline_bytes); }
+        catch (error) {
+          if (error instanceof ResponseLimitError) return toolError(`Attachment exceeds max_inline_bytes (${max_inline_bytes}). Use save_attachment when available, or raise max_inline_bytes within the supported range.`);
+          throw error;
         }
-        let target: string | undefined;
-        if (save_to !== undefined) {
-          if (!path.isAbsolute(save_to)) return toolError("save_to must be an absolute path");
-          target = path.resolve(save_to);
-          const root = deps.config.downloadDir ? path.resolve(deps.config.downloadDir) : undefined;
-          if (root && target !== root && !target.startsWith(root + path.sep)) {
-            return toolError(`save_to must be inside ${root} (FMSG_MCP_DOWNLOAD_DIR)`);
-          }
-        }
-        const { data, contentType } = await caller.client.downloadAttachment(id, filename, signal);
+        const { data, contentType } = attachment;
         const type = contentType ?? "application/octet-stream";
         const base = { id, filename, size: data.byteLength, content_type: type };
-        if (target) {
-          await mkdir(path.dirname(target), { recursive: true });
-          await writeFile(target, data);
-          return ok(`Saved ${filename} (${data.byteLength} bytes, ${type}) to ${target}`, { ...base, saved_to: target });
-        }
-        if (data.byteLength > max_inline_bytes) {
-          return toolError(
-            `${filename} is ${data.byteLength} bytes, over max_inline_bytes (${max_inline_bytes}); raise max_inline_bytes` +
-              (deps.config.transport === "stdio" ? " or pass save_to" : ""),
-          );
-        }
+        const metadata = `${filename} (${data.byteLength} bytes, ${type}) from message ${id}`;
+        if (type.toLowerCase().startsWith("text/")) return ok(messageData(`${metadata}\n\n${Buffer.from(data).toString("utf8")}`), base);
         const b64 = Buffer.from(data).toString("base64");
         const uri = `fmsg://message/${id}/attachment/${encodeURIComponent(filename)}`;
         const result: CallToolResult = {
           content: [
-            { type: "text", text: `${filename} (${data.byteLength} bytes, ${type}) from message ${id}` },
-            { type: "resource", resource: { uri, mimeType: type, blob: b64 } },
+            { type: "text", text: messageData(metadata) },
           ],
-          structuredContent: { ...base, saved_to: null },
+          structuredContent: base,
         };
         if (type.startsWith("image/")) result.content.push({ type: "image", data: b64, mimeType: type });
+        else result.content.push({ type: "resource", resource: { uri, mimeType: type, blob: b64 } });
         return result;
       }),
   );

@@ -32,6 +32,11 @@
           "name": "FMSG_DEFAULT_DOMAIN",
           "description": "Optional: lets short names resolve to @name@<domain>",
           "isRequired": false
+        },
+        {
+          "name": "FMSG_MCP_DOWNLOAD_DIR",
+          "description": "Optional local folder enabling streamed attachment saves over stdio",
+          "isRequired": false
         }
       ]
     }

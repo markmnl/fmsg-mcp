@@ -1,5 +1,5 @@
 import * as z from "zod/v4";
-import { messageLine } from "../render.js";
+import { messageData, messageLine } from "../render.js";
 import { READ_ONLY, type Register, deliveryItem, deliveryOf, messageItem, ok, toItem, withCaller } from "./common.js";
 
 const pageInput = {
@@ -42,7 +42,7 @@ export const registerListTools: Register = (server, deps) => {
         const text = shown.length
           ? `${shown.length} message${shown.length === 1 ? "" : "s"} (offset ${offset}):\n${shown.map((m) => messageLine(m, caller.address)).join("\n")}`
           : `No ${unread_only ? "unread " : ""}messages at offset ${offset}.`;
-        return ok(text, structured);
+        return ok(shown.length ? messageData(text) : text, structured);
       }),
   );
 
@@ -81,7 +81,7 @@ export const registerListTools: Register = (server, deps) => {
               })
               .join("\n")}`
           : `No sent messages at offset ${offset}.`;
-        return ok(text, structured);
+        return ok(shown.length ? messageData(text) : text, structured);
       }),
   );
 };

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { normalizeFmsgAddress } from "./address.js";
+import { normalizeApiUrl, normalizeOrigin } from "./client/url.js";
 
 export type Transport = "stdio" | "http";
 
@@ -8,7 +9,7 @@ export type HttpConfig = {
   port: number;
   /** Hostnames accepted in the Host header. Empty means: derive from the bind address (loopback only). */
   allowedHosts: string[];
-  /** Origins (hostnames) accepted in the Origin header for browser callers; empty = same as allowedHosts. */
+  /** Exact browser origins. Empty permits same-origin and, on loopback binds, loopback origins on any port. */
   allowedOrigins: string[];
   keyCacheMax: number;
   keyCacheTtlMs: number;
@@ -17,14 +18,16 @@ export type HttpConfig = {
 export type Config = {
   transport: Transport;
   apiUrl: string;
+  /** Explicit opt-in for cleartext upstream traffic outside loopback. */
+  allowInsecureHttp?: boolean;
   /** Only set in stdio mode. */
   apiKey?: string;
   defaultDomain?: string;
   directory?: Record<string, string>;
+  /** Trusted local destination; enables save_attachment over stdio only. */
+  downloadDir?: string;
   /** Hard cap on a single wait_for_message call. */
   waitMaxSeconds: number;
-  /** Directory attachments may be saved under (stdio only); unset = anywhere. */
-  downloadDir?: string;
   http: HttpConfig;
 };
 
@@ -88,9 +91,11 @@ export function loadConfig(
   if (!apiUrl && (transport === "http" || requireCredentials)) {
     throw new Error("FMSG_API_URL is required (base URL of the fmsg Web API, e.g. https://api.example.com)");
   }
-  if (apiUrl && !/^https?:\/\//u.test(apiUrl)) throw new Error("FMSG_API_URL must start with http:// or https://");
+  const allowInsecureHttp = env.FMSG_ALLOW_INSECURE_HTTP === "1";
+  const normalizedApiUrl = apiUrl ? normalizeApiUrl(apiUrl, allowInsecureHttp) : "";
 
   const apiKey = env.FMSG_API_KEY?.trim();
+  if (transport === "stdio" && apiKey && !apiKey.startsWith("fmsgk_")) throw new Error("FMSG_API_KEY must start with fmsgk_");
   if (transport === "stdio" && !apiKey && requireCredentials) {
     throw new Error("FMSG_API_KEY is required in stdio mode (an fmsgk_... key for the address this server sends as)");
   }
@@ -104,21 +109,23 @@ export function loadConfig(
   const directoryPath = env.FMSG_DIRECTORY?.trim();
 
   const port = overrides.port ?? intEnv(env, "FMSG_MCP_PORT", DEFAULT_HTTP_PORT, 0);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("FMSG_MCP_PORT must be between 0 and 65535");
   const host = overrides.host ?? env.FMSG_MCP_HOST?.trim() ?? "127.0.0.1";
 
   return {
     transport,
-    apiUrl: apiUrl.replace(/\/+$/u, ""),
+    apiUrl: normalizedApiUrl,
+    allowInsecureHttp,
     ...(transport === "stdio" && apiKey ? { apiKey } : {}),
     ...(defaultDomain ? { defaultDomain } : {}),
     ...(directoryPath ? { directory: loadDirectory(directoryPath) } : {}),
+    ...(transport === "stdio" && env.FMSG_MCP_DOWNLOAD_DIR?.trim() ? { downloadDir: env.FMSG_MCP_DOWNLOAD_DIR.trim() } : {}),
     waitMaxSeconds: intEnv(env, "FMSG_MCP_WAIT_MAX_SECONDS", DEFAULT_WAIT_MAX_SECONDS),
-    ...(env.FMSG_MCP_DOWNLOAD_DIR?.trim() ? { downloadDir: env.FMSG_MCP_DOWNLOAD_DIR.trim() } : {}),
     http: {
       host,
       port,
       allowedHosts: listEnv(env, "FMSG_MCP_ALLOWED_HOSTS"),
-      allowedOrigins: listEnv(env, "FMSG_MCP_ALLOWED_ORIGINS"),
+      allowedOrigins: listEnv(env, "FMSG_MCP_ALLOWED_ORIGINS").map(normalizeOrigin),
       keyCacheMax: intEnv(env, "FMSG_MCP_KEY_CACHE_MAX", 500),
       keyCacheTtlMs: intEnv(env, "FMSG_MCP_KEY_CACHE_TTL_SECONDS", 1800) * 1000,
     },

@@ -1,7 +1,7 @@
 import { sameAddress } from "./address.js";
 import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import type { FmsgMessage, Thread, ThreadMessage } from "./client/types.js";
-import { DATA_NOT_INSTRUCTIONS, fence, isoTime, participantsOf, truncateUtf8, truncationNote } from "./render.js";
+import { DATA_NOT_INSTRUCTIONS, fence, headerValue, isoTime, participantsOf, truncateUtf8, truncationNote } from "./render.js";
 
 export type ThreadCaps = {
   maxMessages: number;
@@ -195,32 +195,34 @@ export async function assembleThread(
 
 export function renderThread(thread: AssembledThread): string {
   const lines: string[] = [];
+  const guidance: string[] = [];
   const root = thread.messages[0];
   lines.push(`**fmsg thread** root ${thread.root_id} · ${thread.messages.length} message${thread.messages.length === 1 ? "" : "s"} on the lineage to ${thread.trigger_id}${thread.complete ? "" : " (incomplete)"}`);
-  if (root?.topic) lines.push(`Topic: ${root.topic}`);
+  if (root?.topic) lines.push(`Topic: ${headerValue(root.topic)}`);
   if (thread.omitted > 0) lines.push(`(${thread.omitted} earlier message${thread.omitted === 1 ? "" : "s"} omitted)`);
-  lines.push(`Participants (reply-all default): ${thread.participants.join(", ") || "(none)"}`);
+  lines.push(`Participants (reply-all default): ${thread.participants.map(headerValue).join(", ") || "(none)"}`);
   lines.push("");
-  lines.push(DATA_NOT_INSTRUCTIONS);
   for (const m of thread.messages) {
     lines.push("");
     if (!m.visible) {
       lines.push(`--- message ${m.id} [not visible to you] ---`);
       continue;
     }
-    lines.push(`--- message ${m.id} from ${m.from ?? "?"} · ${m.time ?? "draft"}${m.pid ? ` · reply to ${m.pid}` : ""} ---`);
-    if (m.attachments.length) lines.push(`attachments: ${m.attachments.map((a) => `${a.filename} (${a.size} bytes)`).join(", ")}`);
-    if (m.body === null) lines.push(`[non-text body: ${m.type ?? "?"}, ${m.size ?? 0} bytes — use get_message / download_attachment]`);
+    lines.push(`--- message ${m.id} from ${headerValue(m.from ?? "?")} · ${m.time ?? "draft"}${m.pid ? ` · reply to ${m.pid}` : ""} ---`);
+    if (m.attachments.length) lines.push(`attachments: ${m.attachments.map((a) => `${headerValue(a.filename)} (${a.size} bytes)`).join(", ")}`);
+    if (m.body === null) {
+      lines.push(`[non-text body: ${headerValue(m.type ?? "?")}, ${m.size ?? 0} bytes]`);
+      guidance.push(`Use get_message / download_attachment for message ${m.id}.`);
+    }
     else {
-      lines.push(fence(m.body.trimEnd()));
-      if (m.body_truncated) lines.push(truncationNote({ text: "", truncated: true, shown: Buffer.byteLength(m.body), total: m.size ?? 0 }, `call get_message ${m.id} for the full body`).trim());
+      lines.push(fence(m.body));
+      if (m.body_truncated) guidance.push(truncationNote({ text: "", truncated: true, shown: Buffer.byteLength(m.body), total: m.size ?? 0 }, `call get_message ${m.id} for the full body`).trim());
     }
   }
-  lines.push("");
-  lines.push(
+  guidance.push(
     thread.terminal
       ? `Message ${thread.reply_target_id} is terminal: it cannot be replied to.`
       : `To continue this thread, reply to message ${thread.reply_target_id} (the reply tool).`,
   );
-  return lines.join("\n");
+  return [DATA_NOT_INSTRUCTIONS, lines.join("\n"), "End of message data.", ...guidance].join("\n\n");
 }

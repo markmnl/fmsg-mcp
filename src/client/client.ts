@@ -1,6 +1,8 @@
 import { normalizeFmsgAddress } from "../address.js";
 import { normalizeMessageId, parseFmsgJson, stringifyWithIds } from "./message-id.js";
 import { redactSecrets } from "./redact.js";
+import { normalizeApiUrl } from "./url.js";
+import { readBytes, withIdleTimeout } from "./stream.js";
 import type {
   AccessToken,
   Attachment,
@@ -17,8 +19,10 @@ export type FmsgClientOptions = {
   fetch?: FetchLike;
   /** Refresh the access token this long before it expires (default 5 minutes). */
   refreshMarginMs?: number;
-  /** Per-request timeout (default 60 s). */
+  /** Per-request timeout; attachment streams use separate header/idle budgets (default 60 s). */
   timeoutMs?: number;
+  /** Allow HTTP outside loopback only on an explicitly trusted network. */
+  allowInsecureHttp?: boolean;
 };
 
 /** An HTTP error from the fmsg Web API, with the status and the host's own error text. */
@@ -31,7 +35,10 @@ export class FmsgHttpError extends Error {
     /** Machine-readable `code` from the body, when the host sends one (thread routes). */
     readonly code?: string,
   ) {
-    super(message);
+    super(redactSecrets(message).text);
+    if (this.code) this.code = redactSecrets(this.code).text;
+    this.method = redactSecrets(method).text;
+    this.path = redactSecrets(path).text;
     this.name = "FmsgHttpError";
   }
 }
@@ -47,14 +54,22 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
 }
 
 async function readError(response: Response): Promise<{ message: string; code?: string }> {
-  const raw = await response.text().catch(() => "");
+  // Preserve canonical 400/413 JSON policy details. Other errors, including
+  // proxy pages, get a bounded preview independent of message acceptance limits.
+  const isJson = (response.headers.get("content-type") ?? "").toLowerCase().includes("json");
+  let raw: string;
+  if (!isJson || ![400, 413].includes(response.status)) {
+    const { data, truncated } = await readBytes(response.body, 2048, true);
+    raw = Buffer.from(data).toString("utf8");
+    if (!isJson || truncated) return { message: (raw || `HTTP ${response.status}`) + (truncated ? "\n[upstream response truncated at 2048 bytes]" : "") };
+  } else raw = await response.text();
   if (!raw) return { message: `HTTP ${response.status}` };
   try {
     const parsed = JSON.parse(raw) as { error?: unknown; code?: unknown };
     const message = typeof parsed.error === "string" ? parsed.error : `HTTP ${response.status}`;
     return typeof parsed.code === "string" ? { message, code: parsed.code } : { message };
   } catch {
-    return { message: raw.slice(0, 300) };
+    return { message: Buffer.byteLength(raw) > 2048 ? Buffer.from(raw).subarray(0, 2048).toString("utf8") + "\n[upstream response truncated at 2048 bytes]" : raw };
   }
 }
 
@@ -70,14 +85,14 @@ export class FmsgClient {
   readonly apiUrl: string;
   private token?: AccessToken;
   private tokenPromise?: Promise<AccessToken>;
+  private readonly lifetime = new AbortController();
 
   constructor(
     apiUrl: string,
-    private readonly apiKey: string,
+    private apiKey: string,
     private readonly options: FmsgClientOptions = {},
   ) {
-    this.apiUrl = apiUrl.replace(/\/+$/u, "");
-    if (!/^https?:\/\//u.test(this.apiUrl)) throw new Error("FMSG_API_URL must be an http(s) URL");
+    this.apiUrl = normalizeApiUrl(apiUrl, options.allowInsecureHttp);
     if (!apiKey.startsWith("fmsgk_")) throw new Error("fmsg API key must start with fmsgk_");
   }
 
@@ -91,27 +106,40 @@ export class FmsgClient {
   }
 
   async getToken(force = false): Promise<AccessToken> {
+    this.lifetime.signal.throwIfAborted();
     const margin = this.options.refreshMarginMs ?? 300_000;
+    if (this.tokenPromise) return this.tokenPromise;
     if (!force && this.token && this.token.expiresAtMs - margin > Date.now()) return this.token;
-    if (!force && this.tokenPromise) return this.tokenPromise;
     this.tokenPromise = this.exchangeToken();
     try {
       this.token = await this.tokenPromise;
+      this.lifetime.signal.throwIfAborted();
       return this.token;
+    } catch (error) {
+      this.token = undefined;
+      throw error;
     } finally {
       this.tokenPromise = undefined;
     }
+  }
+
+  /** Release credentials and cancel outstanding work when the client is no longer used. */
+  close(): void {
+    this.lifetime.abort();
+    this.apiKey = "";
+    this.token = undefined;
   }
 
   private async exchangeToken(): Promise<AccessToken> {
     const response = await this.fetchImpl(`${this.apiUrl}/fmsg/token`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.apiKey}` },
-      signal: AbortSignal.timeout(this.options.timeoutMs ?? 60_000),
+      redirect: "error",
+      signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(this.options.timeoutMs ?? 60_000)]),
     });
     if (!response.ok) {
-      const { message } = await readError(response);
-      throw new FmsgHttpError(`token exchange failed: ${redactSecrets(message).text}`, response.status, "POST", "/fmsg/token");
+      const { message, code } = await readError(response);
+      throw new FmsgHttpError(`token exchange failed: ${message}`, response.status, "POST", "/fmsg/token", code);
     }
     const body = (await response.json()) as { access_token?: unknown; expires_in?: unknown; expires_at?: unknown };
     if (typeof body.access_token !== "string") throw new Error("token response has no access_token");
@@ -125,22 +153,30 @@ export class FmsgClient {
     return { accessToken: body.access_token, address, expiresAtMs };
   }
 
-  private async request(path: string, init: RequestInit = {}, retry401 = true): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, retry401 = true, streaming = false): Promise<Response> {
+    init.signal?.throwIfAborted();
     const token = await this.getToken();
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${token.accessToken}`);
-    const signal = init.signal ?? AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
-    const response = await this.fetchImpl(`${this.apiUrl}${path}`, { ...init, headers, signal });
-    if (response.status === 401 && retry401) {
-      await this.getToken(true);
-      return this.request(path, init, false);
-    }
-    if (!response.ok) {
-      const { message, code } = await readError(response);
-      const method = init.method ?? "GET";
-      throw new FmsgHttpError(redactSecrets(message).text, response.status, method, path, code);
-    }
-    return response;
+    const headerDeadline = new AbortController();
+    const headerTimer = streaming ? setTimeout(() => headerDeadline.abort(new DOMException("attachment response headers timed out", "TimeoutError")), this.options.timeoutMs ?? 60_000).unref() : undefined;
+    const timeout = streaming ? headerDeadline.signal : AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
+    const signal = AbortSignal.any([this.lifetime.signal, timeout, ...(init.signal ? [init.signal] : [])]);
+    try {
+      signal.throwIfAborted();
+      const response = await this.fetchImpl(`${this.apiUrl}${path}`, { ...init, headers, signal, redirect: "error" });
+      if (response.status === 401 && retry401) {
+        await response.body?.cancel();
+        await this.getToken(true);
+        return this.request(path, init, false, streaming);
+      }
+      if (!response.ok) {
+        const { message, code } = await readError(response);
+        const method = init.method ?? "GET";
+        throw new FmsgHttpError(message, response.status, method, path, code);
+      }
+      return response;
+    } finally { clearTimeout(headerTimer); }
   }
 
   private async json<T>(path: string, init?: RequestInit): Promise<T> {
@@ -216,7 +252,13 @@ export class FmsgClient {
 
   /** Download by a `download` path returned from thread/messages (`/fmsg/...`). */
   async downloadPath(path: string, signal?: AbortSignal): Promise<{ data: Uint8Array; contentType?: string }> {
-    if (!path.startsWith("/fmsg/") || path.includes("://")) throw new Error(`refusing to download non-fmsg path ${path}`);
+    // Paths come from upstream message data. Reject normalization tricks and
+    // routes outside the documented body/attachment download endpoints.
+    if (!/^\/fmsg\/[0-9]+\/(?:data|attach\/[^/?#\\]+)$/u.test(path) || /[\u0000-\u0020\\]/u.test(path)) {
+      throw new Error("refusing an invalid fmsg download path");
+    }
+    const normalized = new URL(path, "https://example.com");
+    if (normalized.pathname !== path || normalized.search || normalized.hash) throw new Error("refusing an invalid fmsg download path");
     const response = await this.request(path, { signal });
     const contentType = response.headers.get("content-type") ?? undefined;
     return { data: new Uint8Array(await response.arrayBuffer()), ...(contentType ? { contentType } : {}) };
@@ -260,14 +302,27 @@ export class FmsgClient {
     id: string,
     filename: string,
     signal?: AbortSignal,
+    maxBytes?: number,
   ): Promise<{ data: Uint8Array; contentType?: string }> {
+    const { stream, contentType } = await this.streamAttachment(id, filename, signal);
+    const { data } = await readBytes(stream, maxBytes);
+    return { data, ...(contentType ? { contentType } : {}) };
+  }
+
+  /** Caller must consume or cancel the stream. Progress resets the idle budget; cancellation remains active. */
+  async streamAttachment(id: string, filename: string, signal?: AbortSignal): Promise<{ stream: ReadableStream<Uint8Array>; contentType?: string }> {
     const mid = normalizeMessageId(id);
+    if (!filename || filename === "." || filename === ".." || /[/\\\u0000]/u.test(filename)) {
+      throw new Error("use an attachment filename without directory components");
+    }
     const response = await this.request(
       `/fmsg/${encodeURIComponent(mid)}/attach/${encodeURIComponent(filename)}`,
       { signal },
+      true, true,
     );
     const contentType = response.headers.get("content-type") ?? undefined;
-    return { data: new Uint8Array(await response.arrayBuffer()), ...(contentType ? { contentType } : {}) };
+    if (!response.body) throw new Error("attachment response has no body");
+    return { stream: withIdleTimeout(response.body, this.options.timeoutMs ?? 60_000), ...(contentType ? { contentType } : {}) };
   }
 
   async deleteMessage(id: string, signal?: AbortSignal): Promise<void> {
@@ -313,12 +368,18 @@ export class FmsgClient {
     return { filename: result.filename ?? attachment.filename, size: result.size ?? attachment.data.byteLength };
   }
 
-  /** Draft → attach → send. The draft is deleted if any step after creation fails. */
+  /**
+   * Draft → attach → send. Selected secret patterns in body/topic are replaced;
+   * the result reports their count and the sent topic. Attachments are unchanged.
+   * The draft is deleted if any step after creation fails.
+   */
   async send(input: SendInput): Promise<SendResult> {
     if (input.to.length === 0) throw new Error("at least one recipient is required");
     if (input.pid && input.topic) throw new Error("a reply (pid) cannot carry a topic");
     const from = await this.address();
-    const draftId = await this.createDraft(input, from);
+    const body = redactSecrets(input.body);
+    const topic = redactSecrets(input.pid ? "" : (input.topic ?? ""));
+    const draftId = await this.createDraft({ ...input, body: body.text, topic: topic.text }, from);
     try {
       const attachments: Attachment[] = [];
       for (const attachment of input.attachments ?? []) {
@@ -333,6 +394,8 @@ export class FmsgClient {
         id: result.id === undefined || result.id === null ? draftId : normalizeMessageId(result.id),
         time: result.time ?? null,
         attachments,
+        redactions: body.count + topic.count,
+        topic: topic.text,
       };
     } catch (error) {
       await this.deleteMessage(draftId).catch(() => undefined);

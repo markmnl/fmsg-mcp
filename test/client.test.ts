@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FmsgClient, FmsgHttpError } from "../src/client/client.js";
 import { parseFmsgJson, stringifyWithIds, normalizeMessageId } from "../src/client/message-id.js";
 import { redactSecrets } from "../src/client/redact.js";
+import { fence } from "../src/render.js";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
 import { ALICE, BOB } from "./helpers.js";
 
@@ -18,12 +19,20 @@ describe("message ids", () => {
   });
 });
 
-describe("redaction", () => {
+describe("content safety", () => {
   it("replaces keys and JWTs and counts them", () => {
     const r = redactSecrets("key fmsgk_abcdefghijkl_0123456789 and token eyJhbGciOi.eyJzdWIiOiJ4In0.c2lnbmF0dXJl end");
     expect(r.text).not.toContain("fmsgk_abc");
     expect(r.text).not.toContain("eyJ");
     expect(r.count).toBe(2);
+  });
+
+  it("frames large text with many backtick runs without exceeding the argument limit", () => {
+    const body = "text`".repeat(150000) + "\n````";
+    const framed = fence(body);
+    expect(framed.slice(0, 6)).toBe("`````\n");
+    expect(framed.slice(-6)).toBe("\n`````");
+    expect(framed.slice(6, -6) === body).toBe(true);
   });
 });
 
@@ -35,7 +44,97 @@ describe("FmsgClient", () => {
     await fake.start();
     client = new FmsgClient(fake.baseUrl, "fmsgk_alice_secret");
   });
-  afterEach(async () => fake.stop());
+  afterEach(async () => { vi.useRealTimers(); vi.restoreAllMocks(); client.close(); await fake.stop(); });
+
+  // Keep deadline tests independent of socket keep-alive timers and real time.
+  function tokenResponse(): Promise<Response> {
+    const payload = Buffer.from(JSON.stringify({ sub: ALICE, exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+    return Promise.resolve(Response.json({ access_token: `e30.${payload}.signature`, expires_in: 3600 }));
+  }
+
+  function useDeadlineClock(): void {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Native AbortSignal.timeout does not use the fake clock. Include it so the
+    // old whole-body timeout would abort a progressing stream in this regression.
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      const abort = new AbortController();
+      setTimeout(() => abort.abort(new DOMException("timed out", "TimeoutError")), ms).unref();
+      return abort.signal;
+    });
+  }
+
+  function controlledDownload() {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let requestSignal!: AbortSignal;
+    const cancelled = vi.fn();
+    client = new FmsgClient(fake.baseUrl, "fmsgk_alice_secret", {
+      timeoutMs: 100,
+      fetch: (url, init) => {
+        if (String(url).endsWith("/token")) return tokenResponse();
+        requestSignal = init!.signal!;
+        return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            source = controller;
+            requestSignal.addEventListener("abort", () => controller.error(requestSignal.reason), { once: true });
+          },
+          cancel: cancelled,
+        }), { headers: { "content-type": "application/octet-stream" } }));
+      },
+    });
+    return { get source() { return source; }, get signal() { return requestSignal; }, cancelled };
+  }
+
+  it("allows a progressing attachment to outlive the request timeout", async () => {
+    const upstream = controlledDownload();
+    await client.address();
+    useDeadlineClock();
+    const { stream } = await client.streamAttachment("1", "slow.bin");
+    const reader = stream.getReader();
+    for (let i = 0; i < 4; i++) {
+      const reading = reader.read();
+      await vi.advanceTimersByTimeAsync(80);
+      upstream.source.enqueue(new Uint8Array([i]));
+      expect((await reading).value).toEqual(new Uint8Array([i]));
+    }
+    upstream.source.close();
+    expect((await reader.read()).done).toBe(true);
+    expect(upstream.signal.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    reader.releaseLock();
+  });
+
+  it.each(["idle", "caller", "close"])("stops an attachment stream on %s and releases its timer", async (reason) => {
+    const upstream = controlledDownload();
+    await client.address();
+    useDeadlineClock();
+    const abort = new AbortController();
+    const { stream } = await client.streamAttachment("1", "slow.bin", abort.signal);
+    const reader = stream.getReader();
+    const rejected = expect(reader.read()).rejects.toMatchObject({ name: reason === "idle" ? "TimeoutError" : "AbortError" });
+    if (reason === "idle") await vi.advanceTimersByTimeAsync(101);
+    else if (reason === "caller") abort.abort();
+    else client.close();
+    await rejected;
+    if (reason === "idle") expect(upstream.cancelled).toHaveBeenCalledOnce();
+    else expect(upstream.signal.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    reader.releaseLock();
+  });
+
+  it("still times out while waiting for attachment response headers", async () => {
+    client = new FmsgClient(fake.baseUrl, "fmsgk_alice_secret", {
+      timeoutMs: 100,
+      fetch: (url, init) => String(url).endsWith("/token") ? tokenResponse() : new Promise((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+      }),
+    });
+    await client.address();
+    useDeadlineClock();
+    const rejected = expect(client.streamAttachment("1", "slow.bin")).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.advanceTimersByTimeAsync(101);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("exchanges the key once and caches the token", async () => {
     expect(await client.address()).toBe(ALICE);
@@ -56,6 +155,40 @@ describe("FmsgClient", () => {
     await expect(client.getMessage("42")).rejects.toMatchObject({ status: 404, name: "FmsgHttpError" });
     const bad = new FmsgClient(fake.baseUrl, "fmsgk_nope");
     await expect(bad.address()).rejects.toBeInstanceOf(FmsgHttpError);
+  });
+
+  it("rejects attachment path components before making an upstream request", async () => {
+    for (const filename of ["", ".", "..", "../note.txt", "folder/note.txt", "folder\\note.txt", "bad\u0000name"]) {
+      await expect(client.streamAttachment("1", filename)).rejects.toThrow("filename without directory components");
+    }
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it("bounds proxy error previews while streaming and preserves host policy JSON", async () => {
+    let chunks = 0;
+    let cancelled = false;
+    const proxyClient = new FmsgClient(fake.baseUrl, "fmsgk_alice_secret", {
+      fetch: (url, init) => String(url).endsWith("/token") ? fetch(url, init) : Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { chunks++; controller.enqueue(Buffer.from("<html>proxy unavailable</html>".repeat(100))); },
+        cancel() { cancelled = true; },
+      }), { status: 502, headers: { "content-type": "text/html" } })),
+    });
+    try {
+      const error = await proxyClient.listInbox().catch(error => error as FmsgHttpError);
+      expect(error).toBeInstanceOf(FmsgHttpError);
+      expect((error as FmsgHttpError).message.length).toBeLessThan(2200);
+      expect((error as FmsgHttpError).message).toContain("truncated");
+      expect(chunks).toBeLessThan(5);
+      expect(cancelled).toBe(true);
+      const detail = "host acceptance explanation ".repeat(200);
+      fake.failNext = { match: /^GET \/fmsg$/u, status: 413, error: detail, code: "host_limit" };
+      await expect(client.listInbox()).rejects.toMatchObject({ status: 413, message: detail, code: "host_limit" });
+      fake.failNext = { match: /^GET \/fmsg$/u, status: 503, error: detail };
+      const jsonError = await client.listInbox().catch(error => error as FmsgHttpError);
+      expect(jsonError).toBeInstanceOf(FmsgHttpError);
+      expect((jsonError as FmsgHttpError).message.length).toBeLessThan(2200);
+      expect((jsonError as FmsgHttpError).message).toContain("truncated");
+    } finally { proxyClient.close(); }
   });
 
   it("lists the inbox with exact big ids and fetches full text beyond short_text", async () => {

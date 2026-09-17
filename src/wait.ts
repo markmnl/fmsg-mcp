@@ -1,7 +1,9 @@
 import type WebSocket from "ws";
-import { FmsgClient } from "./client/client.js";
+import { setTimeout as delay } from "node:timers/promises";
+import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import { compareMessageIds, maxMessageId, minMessageId } from "./client/message-id.js";
 import type { FmsgMessage } from "./client/types.js";
+import { safeErrorMessage } from "./client/redact.js";
 import { openFmsgWebSocket, parseWsEvent } from "./client/ws.js";
 
 export type WaitOptions = {
@@ -52,6 +54,7 @@ export async function waitForMessage(
   signal?: AbortSignal,
   deps: Deps = {},
 ): Promise<WaitResult> {
+  signal?.throwIfAborted();
   const start = Date.now();
   const deadline = start + options.timeoutMs;
   const maxBatch = options.maxBatch ?? 20;
@@ -68,6 +71,20 @@ export async function waitForMessage(
   let skippedMax = floor;
 
   let finished = false;
+  const retryStop = new AbortController();
+  const retrySignal = signal ? AbortSignal.any([signal, retryStop.signal]) : retryStop.signal;
+  const authorizationFailure = (error: unknown) => error instanceof FmsgHttpError &&
+    ([401, 403].includes(error.status) || error.path === "/fmsg/token");
+  const retryRead = async <T>(read: () => Promise<T>, attempts = 3): Promise<T> => {
+    for (let attempt = 0; ; attempt++) {
+      retrySignal.throwIfAborted();
+      try { return await read(); }
+      catch (error) {
+        if (authorizationFailure(error) || attempt + 1 >= attempts) throw error;
+        await delay(400 * (attempt + 1), undefined, { signal: retrySignal });
+      }
+    }
+  };
   const rootCache = new Map<string, string>();
   const lookupRoot = async (id: string): Promise<string> => {
     try {
@@ -92,19 +109,9 @@ export async function waitForMessage(
   const rootOf = async (id: string, attempts = 3): Promise<string> => {
     const cached = rootCache.get(id);
     if (cached !== undefined) return cached;
-    let lastError: unknown;
-    for (let i = 0; i < attempts; i++) {
-      if (signal?.aborted || finished) break;
-      try {
-        const root = await lookupRoot(id);
-        rootCache.set(id, root);
-        return root;
-      } catch (error) {
-        lastError = error;
-        if (i + 1 < attempts) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
-      }
-    }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    const root = await retryRead(() => lookupRoot(id), attempts);
+    rootCache.set(id, root);
+    return root;
   };
   let targetRoot: string | undefined;
   if (options.threadOf) {
@@ -128,12 +135,15 @@ export async function waitForMessage(
   let socket: WebSocket | undefined;
   let pollTimer: NodeJS.Timeout | undefined;
   let settleTimer: NodeJS.Timeout | undefined;
+  let recoveryTimer: NodeJS.Timeout | undefined;
 
   return new Promise<WaitResult>((resolve, reject) => {
     const cleanup = () => {
       finished = true;
+      retryStop.abort();
       clearTimeout(deadlineTimer);
       clearTimeout(settleTimer);
+      clearTimeout(recoveryTimer);
       clearInterval(pollTimer);
       clearInterval(tickTimer);
       signal?.removeEventListener("abort", onAbort);
@@ -183,18 +193,18 @@ export async function waitForMessage(
       note = "cancelled";
       finish();
     };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) return onAbort();
-
     const deadlineTimer = setTimeout(() => {
       if (batch.length && settleTimer) note = "the time limit cut the settle window short";
       finish();
     }, Math.max(0, deadline - Date.now()));
     const tickTimer = setInterval(() => options.onTick?.(Date.now() - start), 20_000);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) return onAbort();
 
     const consider = async (m: FmsgMessage) => {
       if (finished || seen.has(m.id)) return;
       seen.add(m.id);
+      for (let i = unclassified.length - 1; i >= 0; i--) if (unclassified[i]?.id === m.id) unclassified.splice(i, 1);
       if (compareMessageIds(m.id, floor) <= 0) return;
       const skip = (reason: SkipReason) => {
         skipped.push({ id: m.id, reason });
@@ -209,7 +219,7 @@ export async function waitForMessage(
       try {
         root = await rootOf(m.id);
       } catch (error) {
-        if (!finished) unclassified.push({ id: m.id, from: m.from, error: error instanceof Error ? error.message : String(error) });
+        if (!finished) unclassified.push({ id: m.id, from: m.from, error: safeErrorMessage(error) });
         return;
       } finally {
         inflight.delete(m.id);
@@ -232,8 +242,9 @@ export async function waitForMessage(
     };
 
     const catchUp = async () => {
+      if (finished) return;
       try {
-        const page = await client.listInbox(100, 0, signal);
+        const page = await client.listInbox(100, 0, retrySignal);
         for (const m of [...page].reverse()) await consider(m);
       } catch (error) {
         if (!finished) fail(error);
@@ -246,6 +257,31 @@ export async function waitForMessage(
       note = note ?? why;
       pollTimer = setInterval(() => void catchUp(), pollIntervalMs);
       void catchUp();
+    };
+
+    const considerPushed = async (id: string) => {
+      if (finished || seen.has(id) || inflight.has(id)) return;
+      inflight.set(id, "");
+      try {
+        // A socket was authorized at its handshake. Re-read through a protected
+        // route so an old connection cannot bypass upstream grant revocation.
+        const message = await retryRead(() => client.getMessage(id, signal));
+        inflight.delete(id);
+        await consider(message);
+      } catch (error) {
+        if (finished) return;
+        if (authorizationFailure(error)) {
+          fail(error);
+        } else {
+          if (!unclassified.some(item => item.id === id)) unclassified.push({ id, from: "", error: safeErrorMessage(error) });
+          // Coalesce exhausted reads into one delayed inbox check; a second
+          // announcement is not required to recover an early push.
+          recoveryTimer ??= setTimeout(() => {
+            recoveryTimer = undefined;
+            void catchUp();
+          }, 1000);
+        }
+      } finally { inflight.delete(id); }
     };
 
     const open = deps.openSocket ?? openFmsgWebSocket;
@@ -270,7 +306,7 @@ export async function waitForMessage(
         });
         ws.on("message", (raw) => {
           const event = parseWsEvent(raw);
-          if (event?.type === "new_msg" && event.data) void consider(event.data);
+          if (event?.type === "new_msg" && event.data) void considerPushed(event.data.id);
         });
         ws.on("error", () => {
           clearTimeout(openTimer);
