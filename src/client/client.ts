@@ -27,6 +27,8 @@ export type FmsgClientOptions = {
   timeoutMs?: number;
   /** Allow HTTP outside loopback only on an explicitly trusted network. */
   allowInsecureHttp?: boolean;
+  /** Renew event sockets when their bearer expires (delegated OAuth clients). */
+  reconnectOnTokenExpiry?: boolean;
 };
 
 function withId(message: FmsgMessage, id: string): FmsgMessage {
@@ -76,6 +78,8 @@ export class FmsgClient {
   private get fetchImpl(): FetchLike {
     return this.options.fetch ?? fetch;
   }
+
+  get reconnectOnTokenExpiry(): boolean { return this.options.reconnectOnTokenExpiry === true; }
 
   /** The provider's authenticated address, pinned for this client's lifetime. */
   async address(signal?: AbortSignal): Promise<string> {
@@ -165,7 +169,8 @@ export class FmsgClient {
       if (!response.ok) {
         const { message, code } = await readError(response);
         const method = init.method ?? "GET";
-        throw new FmsgHttpError(message, response.status, method, path, code);
+        throw new FmsgHttpError(message, response.status, method, path, code,
+          response.status === 403 && /\bBearer\b.*\berror="insufficient_scope"/iu.test(response.headers.get("www-authenticate") ?? ""));
       }
       return response;
     } finally { clearTimeout(headerTimer); }

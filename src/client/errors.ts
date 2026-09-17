@@ -10,6 +10,8 @@ export class FmsgHttpError extends Error {
     readonly path: string,
     /** Machine-readable `code` from the body, when the host sends one (thread routes). */
     readonly code?: string,
+    /** The Web API rejected a delegated scope or closed route. */
+    readonly insufficientScope = false,
   ) {
     super(redactSecrets(message).text);
     if (this.code) this.code = redactSecrets(this.code).text;

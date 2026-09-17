@@ -4,6 +4,7 @@ import type { FmsgMessage, RecipientDelivery } from "../client/types.js";
 import type { Config } from "../config.js";
 import { type Caller, type CallerProvider, callerFor } from "../context.js";
 import { toolError } from "../errors.js";
+import { OAuthRequestError } from "../oauth/errors.js";
 import { FmsgHttpError } from "../client/client.js";
 import { isoTime, preview } from "../render.js";
 
@@ -99,7 +100,7 @@ export async function withCaller(
   try {
     return await body(caller, ctx.mcpReq.signal);
   } catch (error) {
-    if (error instanceof FmsgHttpError && (error.status === 401 || (error.path === "/fmsg/token" && [400, 403].includes(error.status)))) {
+    if ((error instanceof OAuthRequestError && error.status === 401) || (error instanceof FmsgHttpError && (error.status === 401 || (error.path === "/fmsg/token" && [400, 403].includes(error.status))))) {
       deps.provider.invalidate?.(caller);
     }
     return toolError(error, caller.address);

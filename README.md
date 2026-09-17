@@ -8,14 +8,17 @@ An [MCP](https://modelcontextprotocol.io) server that gives any AI agent its own
 [fmsg](https://github.com/markmnl/fmsg) address: send messages, follow threads, react, exchange
 attachments and wait for replies, through a deployed
 [fmsg Web API](https://github.com/markmnl/fmsg-webapi). Connect through stdio in hosts such as
-Claude Code, Claude Desktop, Cursor and VS Code, or through HTTP in clients that support bearer headers.
+Claude Code, Claude Desktop, Cursor and VS Code, or through HTTP using API-key headers or configured OAuth.
 
 - **stdio** for local hosts: one address per server process, configured by two environment variables.
 - **Streamable HTTP** for shared or remote deployments: one endpoint serving many users, each
-  authenticated by their own fmsg API key.
+  authenticated by their own fmsg API key or OAuth connection.
 - The fmsg Web API client is exported for reuse: `import { FmsgClient } from "@markmnl/fmsg-mcp/client"`.
 
 ## 1. Get an fmsg address and API key
+
+Connecting to an existing OAuth-enabled endpoint? Add its MCP URL to your host and sign in;
+you can skip the API-key setup below. Operators can enable this with [HTTP OAuth](docs/oauth.md).
 
 You send as an fmsg address, authenticated by an API key (`fmsgk_…`) issued by your fmsg host:
 
@@ -75,7 +78,9 @@ docker run -e FMSG_API_URL=https://api.example.com \
 
 The MCP endpoint is `/mcp`; `/healthz` reports liveness. Use a client that supports an explicitly
 configured `Authorization: Bearer fmsgk_...` header. Each caller supplies its own key; a shared
-header means a shared fmsg identity. Hosted connectors that require OAuth are not supported yet.
+header means a shared fmsg identity. For browser sign-in without user API keys, configure
+[HTTP OAuth](docs/oauth.md): the operator supplies an issuer, resource URI and exchange client.
+Users add the public MCP URL in a host supporting that issuer's client registration method.
 
 For [Claude Code over HTTP](https://code.claude.com/docs/en/mcp):
 
@@ -126,6 +131,7 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 |---|---|---|
 | `FMSG_API_URL` | — | Base URL of the fmsg Web API (required) |
 | `FMSG_API_KEY` | — | `fmsgk_…` key; stdio mode only |
+| `FMSG_MCP_AUTH_MODE` | `api-key` | HTTP authentication: `api-key` or `oauth`; see [OAuth settings](docs/oauth.md#operator-configuration) |
 | `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |
 | `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>` |
 | `FMSG_DIRECTORY` | — | JSON file mapping short names to full addresses |
@@ -134,7 +140,7 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
 | `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
 | `FMSG_MCP_ALLOWED_ORIGINS` | same origin; loopback origins on loopback binds | Comma-separated browser origins including scheme and port; an explicit list replaces the loopback default; hostname-only values are rejected |
-| `FMSG_MCP_KEY_CACHE_MAX` / `FMSG_MCP_KEY_CACHE_TTL_SECONDS` | `500` / `1800` | HTTP mode per-key client cache |
+| `FMSG_MCP_KEY_CACHE_MAX` / `FMSG_MCP_KEY_CACHE_TTL_SECONDS` | `500` / `1800` | HTTP client cache bound; TTL applies only to API-key mode |
 
 The API key is exchanged for a short-lived access token that the server renews automatically.
 API URLs must not contain credentials, query strings or fragments. Authenticated requests do not
@@ -193,7 +199,7 @@ unchanged. Use `streamAttachment()` to consume large files incrementally; consum
 Applications with their own authorization integration can pass a `TokenProvider` instead of an
 API-key string. The client shares renewal across concurrent requests and keeps the authenticated
 address fixed. See the [token-provider contract](./docs/token-providers.md). This library interface
-does not enable hosted OAuth in the MCP executable yet.
+is also used by the executable's optional [OAuth mode](./docs/oauth.md).
 
 ## Development
 

@@ -27,8 +27,9 @@ The canonical contract is the fmsg-webapi README and
 src/index.ts        bin entry: stdio by default, --http [host:port], --version, --help
 src/config.ts       env → Config; FMSG_API_KEY required for stdio and refused for HTTP
 src/server.ts       createFmsgMcpServer(provider, config): registration only, no I/O
-src/context.ts      CallerProvider: fixed caller over stdio, per-bearer-key over HTTP
+src/context.ts      CallerProvider: fixed caller over stdio, per-bearer-credential over HTTP
 src/auth.ts         HTTP bearer verifier: key hash → cached FmsgClient + address
+src/oauth/          HTTP OAuth discovery, validation, scopes and token exchange
 src/http.ts         node:http server, /mcp + /healthz, Host/Origin allowlist, bearer gate
 src/tools/*.ts      one file per tool group; src/tools/common.ts has shared schemas/helpers
 src/wait.ts         wait_for_message engine (WebSocket first, inbox catch-up, settle batching)
@@ -53,6 +54,11 @@ test/fmsg-docker.e2e.test.ts   real two-host run, gated by FMSG_E2E=1
   and a separate fence per body. Server-authored guidance stays outside the data.
 - stdout is the stdio protocol channel: log with `console.error` only.
 - Public OSS repo: never name a specific identity provider; use `example.com` in examples.
+
+OAuth mode validates incoming tokens for the exact MCP audience and exchanges them for a
+separate Web API token. Never forward the incoming JWT or send `X-FMSG-Act-As`. Keep scope
+classification in `src/oauth/scopes.ts` synchronized with tools; reply needs read and write.
+See `docs/oauth.md` for the vendor-neutral claims contract and deployment requirements.
 
 ## Adding a tool
 

@@ -37,7 +37,7 @@ export type SeedInput = Partial<Omit<StoredMessage, "data" | "readBy" | "attachm
   attachments?: Array<{ filename: string; data: Buffer; type?: string }>;
 };
 
-export type LoggedRequest = { method: string; path: string; body?: unknown; rawBody?: string };
+export type LoggedRequest = { method: string; path: string; body?: unknown; rawBody?: string; authorization?: string; actAs?: string };
 
 const ID_FIELDS = /"(id|pid|batch_id|root_id|trigger_id)":"([0-9]+)"/gu;
 
@@ -84,7 +84,7 @@ export class FakeFmsgServer {
   /** Registered provider fixtures only; this does not simulate JWT verification or OAuth. */
   readonly providerTokens = new Map<string, AccessToken>();
   /** Fail the next request whose path matches, with this status and message. */
-  failNext: { match: RegExp; status: number; error: string; code?: string } | undefined;
+  failNext: { match: RegExp; status: number; error: string; code?: string; challenge?: string } | undefined;
   /** Force the next protected request to answer 401 (expired JWT simulation). */
   rejectNextProtected = false;
   /** Make thread/messages answer 422 thread_too_deep. */
@@ -100,6 +100,7 @@ export class FakeFmsgServer {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (url.pathname !== "/fmsg/ws") return socket.destroy();
       const bearer = req.headers.authorization?.replace(/^Bearer\s+/iu, "");
+      this.requests.push({ method: "GET", path: "/fmsg/ws", authorization: req.headers.authorization, actAs: req.headers["x-fmsg-act-as"] as string | undefined });
       const subject = this.authenticatedSubject(bearer ?? url.searchParams.get("access_token") ?? undefined);
       if (!subject) {
         socket.write("HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\n\r\n{\"error\":\"unauthorized\"}");
@@ -271,10 +272,13 @@ export class FakeFmsgServer {
     const path = url.pathname;
     const log: LoggedRequest = { method, path };
     this.requests.push(log);
+    log.authorization = req.headers.authorization;
+    log.actAs = req.headers["x-fmsg-act-as"] as string | undefined;
 
     if (this.failNext && this.failNext.match.test(`${method} ${path}`)) {
       const f = this.failNext;
       this.failNext = undefined;
+      if (f.challenge) res.setHeader("www-authenticate", f.challenge);
       await readBody(req);
       return this.json(res, f.status, { error: f.error, ...(f.code ? { code: f.code } : {}) });
     }

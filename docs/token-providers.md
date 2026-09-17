@@ -1,8 +1,8 @@
 # Web API token providers
 
 `FmsgClient` accepts either the existing `fmsgk_…` API-key string or a `TokenProvider`.
-This is a client-library extension point. The MCP executable still uses API keys;
-HTTP OAuth discovery, incoming-token validation and RFC 8693 exchange are separate work.
+This is a client-library extension point. The MCP executable uses it for API keys and
+optional [HTTP OAuth](oauth.md), including discovery, JWT validation and RFC 8693 exchange.
 
 Import `TokenProvider`, `TokenProviderRequest` and `AccessToken` from
 `@markmnl/fmsg-mcp/client` (also exported from the package root):
@@ -70,9 +70,11 @@ replace a later token. `close()` aborts outstanding token acquisition and HTTP w
 The optional signal cancels token acquisition before opening the socket. The caller
 owns the returned WebSocket and must handle its events and close it; long-lived
 connections do not gain automatic token renewal or revocation handling from this helper.
-`wait_for_message` already owns its socket and passes cancellation into acquisition.
+`wait_for_message` owns its socket and passes cancellation into acquisition. With
+`reconnectOnTokenExpiry: true`, it closes and reopens sockets by the token metadata expiry,
+retaining the original wait deadline and cursor; OAuth mode enables this option.
 
-## Contract for a future OAuth adapter
+## OAuth adapter contract
 
 Validate the incoming MCP access token for the configured issuer and MCP audience,
 then use authenticated [RFC 8693 token exchange](https://www.rfc-editor.org/rfc/rfc8693.html)
@@ -84,8 +86,7 @@ configurable; no particular identity provider is required by this interface.
 The IdP and Web API must agree on scopes and consented-identity binding before hosted
 OAuth is enabled. Exchanged messaging tokens must not acquire owner key-management
 rights or broaden identity via `X-FMSG-Act-As`. The Web API enforces those restrictions;
-the tool list is not an authorization boundary. OAuth refresh/revocation and browser
-consent are adapter/authorization-service work. Offline JWT validation alone does not
+the tool list is not an authorization boundary. Browser consent and refresh/revocation endpoints belong to the authorization service and host. Offline JWT validation alone does not
 provide immediate revocation of already issued upstream tokens.
 
 Tests in `test/token-provider.test.ts` use registered opaque token fixtures to exercise

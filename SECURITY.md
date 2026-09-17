@@ -8,7 +8,7 @@ rather than a public issue.
 
 - Messaging authorization, grants, address status, quotas and acceptance remain the responsibility
   of fmsg-webapi and the host services. Each MCP request uses its caller's upstream identity.
-- Over stdio the API key comes from the environment. HTTP callers supply their own bearer keys.
+- Over stdio the API key comes from the environment. HTTP callers supply their own bearer keys or OAuth access tokens, according to the configured mode.
   Keys and JWTs are retained in process memory for token renewal; hashes index the HTTP client cache.
   This server does not intentionally persist them. Idle entries expire on access and periodic sweeps
   (at most 30 seconds apart). Evicted or invalidated clients close immediately if idle; active requests
@@ -49,9 +49,24 @@ rather than a public issue.
   network (`FMSG_ALLOW_INSECURE_HTTP=1`). Authenticated HTTP redirects are refused.
 - Tool annotations and message-data labels guide the AI host; they do not prove user approval or
   prevent prompt injection. The AI host owns tool-use permissions and authorization of automation.
-  fmsg-mcp adds no separate login, messaging permissions, approval gate or per-message confirmation
-  requirement. Normal stdio setup needs only an HTTPS API URL and API key; token renewal and cache
+  OAuth mode adds resource-token validation and messaging scope checks, with sign-in/consent at
+  the configured authorization server. fmsg-mcp adds no recipient ACL, approval gate or per-message
+  confirmation requirement. Normal stdio setup needs only an HTTPS API URL and API key; token renewal and cache
   management run automatically. Guidance permits ongoing work within the user's authorized task or
   automation, subject to the AI host's own approval settings.
+
+## OAuth boundary
+
+OAuth mode validates the configured issuer, exact MCP audience, EdDSA signature, key ID,
+`at+jwt` type, lifetime and address. Only the configured issuer's discovered JWKS is trusted.
+Incoming tokens are exchanged with confidential-client authentication and are never forwarded
+to the Web API. No `X-FMSG-Act-As` header is sent. The Web API must enforce delegated scopes
+and refuse owner-only routes independently of this server.
+
+Exchanged tokens are cached per incoming token for at most five minutes and never past either
+token's expiry. Existing sockets close and renew within that deadline. Incoming tokens validate
+offline until expiry; immediate revocation is checked at exchange. No local cache makes
+revocation immediate or shortens the lifetime of a copied token at another service. See the
+[OAuth contract and revocation limits](docs/oauth.md#exchange-renewal-and-revocation).
 
 When reporting, please remove API keys, tokens, addresses and message bodies from logs.
