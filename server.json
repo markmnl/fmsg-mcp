@@ -1,7 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.markmnl/fmsg-mcp",
-  "description": "Send and receive fmsg federated messages from any AI agent via a deployed fmsg Web API",
+  "title": "fmsg",
+  "description": "Federated messaging with your fmsg hosting provider. Connect with OAuth or an API key.",
+  "websiteUrl": "https://github.com/markmnl/fmsg-mcp#readme",
   "repository": {
     "url": "https://github.com/markmnl/fmsg-mcp",
     "source": "github"
@@ -19,7 +21,7 @@
       "environmentVariables": [
         {
           "name": "FMSG_API_URL",
-          "description": "Base URL of the fmsg Web API",
+          "description": "Base URL of your hosting provider's or self-hosted fmsg Web API",
           "isRequired": true
         },
         {
@@ -37,6 +39,49 @@
           "name": "FMSG_MCP_DOWNLOAD_DIR",
           "description": "Optional local folder enabling streamed attachment saves over stdio",
           "isRequired": false
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://{oauth_mcp_endpoint}",
+      "variables": {
+        "oauth_mcp_endpoint": {
+          "description": "OAuth MCP endpoint from your fmsg hosting provider: hostname and path without https://. Sign in through your AI host; no API key needed.",
+          "isRequired": true,
+          "format": "string",
+          "placeholder": "mcp.example.com/mcp"
+        }
+      }
+    },
+    {
+      "type": "streamable-http",
+      "url": "https://{api_key_mcp_endpoint}",
+      "variables": {
+        "api_key_mcp_endpoint": {
+          "description": "API-key MCP endpoint from your fmsg hosting provider: hostname and path without https://. Use an endpoint that accepts your key.",
+          "isRequired": true,
+          "format": "string",
+          "placeholder": "mcp.example.com/mcp"
+        }
+      },
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Your fmsg API key for the selected MCP endpoint",
+          "isRequired": true,
+          "isSecret": true,
+          "value": "Bearer {api_key}",
+          "variables": {
+            "api_key": {
+              "description": "API key accepted by this endpoint's fmsg Web API, starting with fmsgk_",
+              "isRequired": true,
+              "isSecret": true,
+              "format": "string"
+            }
+          }
         }
       ]
     }
