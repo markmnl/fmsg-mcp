@@ -2,7 +2,7 @@ import { normalizeFmsgAddress } from "../address.js";
 import { normalizeMessageId, parseFmsgJson, stringifyWithIds } from "./message-id.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeApiUrl } from "./url.js";
-import { readBytes } from "./stream.js";
+import { readBytes, withIdleTimeout } from "./stream.js";
 import type {
   AccessToken,
   Attachment,
@@ -19,7 +19,7 @@ export type FmsgClientOptions = {
   fetch?: FetchLike;
   /** Refresh the access token this long before it expires (default 5 minutes). */
   refreshMarginMs?: number;
-  /** Per-request timeout (default 60 s). */
+  /** Per-request timeout; attachment streams use separate header/idle budgets (default 60 s). */
   timeoutMs?: number;
   /** Allow HTTP outside loopback only on an explicitly trusted network. */
   allowInsecureHttp?: boolean;
@@ -153,26 +153,30 @@ export class FmsgClient {
     return { accessToken: body.access_token, address, expiresAtMs };
   }
 
-  private async request(path: string, init: RequestInit = {}, retry401 = true): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, retry401 = true, streaming = false): Promise<Response> {
     init.signal?.throwIfAborted();
     const token = await this.getToken();
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${token.accessToken}`);
-    const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
+    const headerDeadline = new AbortController();
+    const headerTimer = streaming ? setTimeout(() => headerDeadline.abort(new DOMException("attachment response headers timed out", "TimeoutError")), this.options.timeoutMs ?? 60_000).unref() : undefined;
+    const timeout = streaming ? headerDeadline.signal : AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
     const signal = AbortSignal.any([this.lifetime.signal, timeout, ...(init.signal ? [init.signal] : [])]);
-    signal.throwIfAborted();
-    const response = await this.fetchImpl(`${this.apiUrl}${path}`, { ...init, headers, signal, redirect: "error" });
-    if (response.status === 401 && retry401) {
-      await response.body?.cancel();
-      await this.getToken(true);
-      return this.request(path, init, false);
-    }
-    if (!response.ok) {
-      const { message, code } = await readError(response);
-      const method = init.method ?? "GET";
-      throw new FmsgHttpError(message, response.status, method, path, code);
-    }
-    return response;
+    try {
+      signal.throwIfAborted();
+      const response = await this.fetchImpl(`${this.apiUrl}${path}`, { ...init, headers, signal, redirect: "error" });
+      if (response.status === 401 && retry401) {
+        await response.body?.cancel();
+        await this.getToken(true);
+        return this.request(path, init, false, streaming);
+      }
+      if (!response.ok) {
+        const { message, code } = await readError(response);
+        const method = init.method ?? "GET";
+        throw new FmsgHttpError(message, response.status, method, path, code);
+      }
+      return response;
+    } finally { clearTimeout(headerTimer); }
   }
 
   private async json<T>(path: string, init?: RequestInit): Promise<T> {
@@ -305,7 +309,7 @@ export class FmsgClient {
     return { data, ...(contentType ? { contentType } : {}) };
   }
 
-  /** Caller owns the stream and must consume or cancel it. */
+  /** Caller must consume or cancel the stream. Progress resets the idle budget; cancellation remains active. */
   async streamAttachment(id: string, filename: string, signal?: AbortSignal): Promise<{ stream: ReadableStream<Uint8Array>; contentType?: string }> {
     const mid = normalizeMessageId(id);
     if (!filename || filename === "." || filename === ".." || /[/\\\u0000]/u.test(filename)) {
@@ -314,10 +318,11 @@ export class FmsgClient {
     const response = await this.request(
       `/fmsg/${encodeURIComponent(mid)}/attach/${encodeURIComponent(filename)}`,
       { signal },
+      true, true,
     );
     const contentType = response.headers.get("content-type") ?? undefined;
     if (!response.body) throw new Error("attachment response has no body");
-    return { stream: response.body, ...(contentType ? { contentType } : {}) };
+    return { stream: withIdleTimeout(response.body, this.options.timeoutMs ?? 60_000), ...(contentType ? { contentType } : {}) };
   }
 
   async deleteMessage(id: string, signal?: AbortSignal): Promise<void> {

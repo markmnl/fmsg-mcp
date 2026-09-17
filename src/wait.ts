@@ -135,6 +135,7 @@ export async function waitForMessage(
   let socket: WebSocket | undefined;
   let pollTimer: NodeJS.Timeout | undefined;
   let settleTimer: NodeJS.Timeout | undefined;
+  let recoveryTimer: NodeJS.Timeout | undefined;
 
   return new Promise<WaitResult>((resolve, reject) => {
     const cleanup = () => {
@@ -142,6 +143,7 @@ export async function waitForMessage(
       retryStop.abort();
       clearTimeout(deadlineTimer);
       clearTimeout(settleTimer);
+      clearTimeout(recoveryTimer);
       clearInterval(pollTimer);
       clearInterval(tickTimer);
       signal?.removeEventListener("abort", onAbort);
@@ -240,8 +242,9 @@ export async function waitForMessage(
     };
 
     const catchUp = async () => {
+      if (finished) return;
       try {
-        const page = await client.listInbox(100, 0, signal);
+        const page = await client.listInbox(100, 0, retrySignal);
         for (const m of [...page].reverse()) await consider(m);
       } catch (error) {
         if (!finished) fail(error);
@@ -271,6 +274,12 @@ export async function waitForMessage(
           fail(error);
         } else {
           if (!unclassified.some(item => item.id === id)) unclassified.push({ id, from: "", error: safeErrorMessage(error) });
+          // Coalesce exhausted reads into one delayed inbox check; a second
+          // announcement is not required to recover an early push.
+          recoveryTimer ??= setTimeout(() => {
+            recoveryTimer = undefined;
+            void catchUp();
+          }, 1000);
         }
       } finally { inflight.delete(id); }
     };

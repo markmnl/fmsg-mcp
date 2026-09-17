@@ -15,16 +15,19 @@ This is the next planned release; publication still happens through a `v0.2.0` G
 - Upstream API URLs require HTTPS outside loopback unless `FMSG_ALLOW_INSECURE_HTTP=1` explicitly
   enables a trusted private development network. Authenticated redirects are refused.
 - Text attachments return readable text; images return one image block rather than also duplicating
-  the image in an embedded resource.
+  the image in an embedded resource. The default inline budget is 256 KiB; callers can raise it explicitly.
 
 ### Fixes and improvements
 
-- Retry protected reads when a WebSocket announces a message before it is readable, and leave failed
-  reads recoverable by a later announcement. Fix pre-cancelled waits and preserve request deadlines.
+- Retry protected reads when a WebSocket announces a message before it is readable. If retries run
+  out, schedule a delayed inbox catch-up without requiring another push. Fix pre-cancelled waits
+  and preserve request deadlines.
+- Stream attachment bodies with an idle timeout instead of a total download deadline. Repeated saves
+  create numbered files without overwriting. Registry metadata lists the optional download folder.
 - Deduplicate token exchanges and close evicted/invalidated clients once active requests finish.
   Request identity survives cache eviction and SDK cloning of authentication metadata.
-- Keep server guidance outside untrusted-content frames. Clarify authorized conversation behavior
-  and restore reversible/idempotent reaction annotations.
+- Keep each message body fenced separately from its escaped header, and server guidance outside
+  the data. Clarify authorized conversation behavior and restore reversible/idempotent reaction annotations.
 - Bound inline attachment reads and error previews while streaming. Preserve the host's canonical
   JSON 400/413 policy explanations and per-recipient delivery codes, except selected secret redaction.
 - Surface invalid stdio configuration through discoverable tools with corrective guidance.

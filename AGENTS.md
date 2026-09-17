@@ -48,8 +48,8 @@ test/fmsg-docker.e2e.test.ts   real two-host run, gated by FMSG_E2E=1
   `destructiveHint: false` and `idempotentHint: true`. Read tools use `readOnlyHint: true`.
 - Outbound bodies/topics and every error string pass through `redactSecrets`. Never log an API key;
   log the address and a key-hash prefix.
-- Untrusted message content handed to the model is framed with `messageData` in `src/render.ts`;
-  server-authored guidance stays outside that frame.
+- Use `src/render.ts` for untrusted message content: a preamble, escaped single-line header values,
+  and a separate fence per body. Server-authored guidance stays outside the data.
 - stdout is the stdio protocol channel: log with `console.error` only.
 - Public OSS repo: never name a specific identity provider; use `example.com` in examples.
 

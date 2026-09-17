@@ -1,7 +1,7 @@
 import * as z from "zod/v4";
 import { resolveAddress } from "../address.js";
 import { assembleThread, renderThread } from "../thread.js";
-import { messageData, messageLine } from "../render.js";
+import { DATA_NOT_INSTRUCTIONS, fence, headerValue, messageData, messageLine } from "../render.js";
 import { waitForMessage } from "../wait.js";
 import { READ_ONLY, type Register, idSchema, messageItem, ok, toItem, withCaller } from "./common.js";
 
@@ -112,7 +112,9 @@ export const registerWaitTools: Register = (server, deps) => {
           }, signal);
           lines.push("", renderThread(thread));
         } else if (newest) {
-          for (const m of messages) if (m.body) lines.push("", messageData(`--- message ${m.id} from ${m.from} ---\n${m.body}`));
+          lines.push("", DATA_NOT_INSTRUCTIONS);
+          for (const m of messages) if (m.body !== null) lines.push("", `--- message ${m.id} from ${headerValue(m.from)} ---`, fence(m.body));
+          lines.push("", "End of message data.");
           lines.push("", `Reply to message ${newest.id} with the reply tool.`);
         }
         return ok(lines.join("\n"), structured);

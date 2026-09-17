@@ -21,17 +21,22 @@ rather than a public issue.
   of existing sockets on revocation. MCP does not infer ongoing authorization from a socket alone.
 - Selected key/JWT/private-key patterns are redacted from outbound message bodies, topics and errors.
   This does not detect arbitrary sensitive information or scan binary attachments.
-- Message content and upstream error text are fenced as untrusted data. Server-authored guidance
-  stays outside those frames. Instructions permit replies within authorized conversations, but
+- Message bodies and upstream error text are fenced as untrusted data. Each message body has its own
+  fence; server-built headers stay outside it, with external header values escaped onto one line.
+  This distinguishes quoted forged headers from actual message boundaries. Server-authored guidance
+  stays outside the data. Instructions permit replies within authorized conversations, but
   incoming messages cannot authorize adding recipients, contacting new parties or disclosing other
   data. Hosts should still treat tool output as untrusted.
 - `download_attachment` is read-only and enforces its inline byte budget while reading. The optional
   `save_attachment` tool is advertised only in stdio with `FMSG_MCP_DOWNLOAD_DIR` set. It streams to a
-  generated leaf filename, accepts no destination path, and uses exclusive creation (`wx`) to refuse
-  existing files and symlinks. New files use mode `0600` where supported; failed writes remove partial
-  files. The operator must control the configured folder and its ancestors, on a filesystem that
+  generated leaf filename, accepts no destination path, and uses exclusive creation (`wx`) to skip
+  existing files and symlinks, trying numbered filenames instead. New files use mode `0600` where
+  supported; failed writes remove partial files. The operator must control the configured folder and its ancestors, on a filesystem that
   supports exclusive creation. This is not a sandbox against another local process replacing those
   directories. HTTP mode does not expose this write capability.
+- Attachment transfers retain caller cancellation and client shutdown signals. They use a response
+  header deadline followed by a per-read idle timeout (60 seconds each by default), so a progressing
+  large download is not subject to a 60-second total duration limit.
 - Error previews are limited to 2 KiB while reading, except canonical JSON HTTP 400/413 responses:
   those retain the host's acceptance/size-policy explanation. Selected credentials are still redacted;
   oversized previews are explicitly marked as truncated.

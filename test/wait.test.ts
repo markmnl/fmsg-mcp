@@ -74,6 +74,25 @@ describe("waitForMessage", () => {
     expect(r.after_id).toBe(follow.id);
   });
 
+  it("catches up after exhausted early-announcement retries without a second push", async () => {
+    const pending = waitForMessage(client, ALICE, opts({ afterId: "0", timeoutMs: 4000, settleMs: 0 }));
+    await vi.waitFor(() => expect(fake.connectedSockets(ALICE)).toBe(1));
+    const message = fake.seed({ from: BOB, to: [ALICE], data: "visible after the retry window" });
+    fake.messages.delete(message.id);
+    const read = vi.spyOn(client, "getMessage");
+    try {
+      fake.push(message);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3), { timeout: 2500 });
+      await expect(read.mock.results[2]!.value).rejects.toMatchObject({ status: 404 });
+      fake.messages.set(message.id, message);
+      const result = await pending;
+      expect(result.status).toBe("message");
+      expect(result.messages.map(m => m.id)).toEqual([message.id]);
+      expect(result.unclassified).toEqual([]);
+      expect(result.after_id).toBe(message.id);
+    } finally { read.mockRestore(); }
+  });
+
   it("recovers a failed protected read on a later announcement in the same wait", async () => {
     const pending = waitForMessage(client, ALICE, opts({ afterId: "0", settleMs: 0 }));
     await vi.waitFor(() => expect(fake.connectedSockets(ALICE)).toBe(1));

@@ -20,7 +20,7 @@ export const registerSaveTool: Register = (server, deps) => {
   server.registerTool("save_attachment", {
     title: "Save fmsg attachment",
     description: "Stream an attachment directly to the configured local download folder without putting file bytes in model context. " +
-      "Creates a new file named from its message id and filename; never overwrites. No destination path is accepted. " +
+      "Creates a new file named from its message id and filename, adding -1, -2, etc. for repeat saves; never overwrites. No destination path is accepted. " +
       "Returns the saved path and byte count. Available only in stdio when a download folder is configured.",
     inputSchema: z.strictObject({ id: idSchema, filename: z.string().min(1).regex(/^[^/\\\u0000]+$/u, "use an attachment filename without directory components") }),
     outputSchema: z.object({ id: z.string(), filename: z.string(), saved_to: z.string(), size: z.number(), content_type: z.string() }),
@@ -38,9 +38,16 @@ export const registerSaveTool: Register = (server, deps) => {
       // or path supplied by the model is used, and wx refuses existing symlinks.
       await mkdir(configuredDirectory, { recursive: true, mode: 0o700 });
       const directory = await realpath(configuredDirectory);
-      target = path.join(directory, localName(mid, filename));
-      signal.throwIfAborted();
-      file = await open(target, "wx", 0o600);
+      const leaf = localName(mid, filename);
+      const { name, ext } = path.parse(leaf);
+      for (let copy = 0; ; copy++) {
+        signal.throwIfAborted();
+        target = path.join(directory, copy ? `${name}-${copy}${ext}` : leaf);
+        try { file = await open(target, "wx", 0o600); break; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+      }
       for (;;) {
         signal.throwIfAborted();
         const { done, value } = await reader.read();
@@ -58,9 +65,6 @@ export const registerSaveTool: Register = (server, deps) => {
       return ok(`Saved attachment (${size} bytes).\n\n${messageData(`Filename: ${filename}\nSaved to: ${target}`)}`, {
         id: mid, filename, saved_to: target, size, content_type: contentType ?? "application/octet-stream",
       });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("The attachment's generated destination already exists. Move or remove that file with your host's file tools before saving again.");
-      throw error;
     } finally {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();

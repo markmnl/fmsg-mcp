@@ -2,7 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { ResponseLimitError } from "../client/stream.js";
 import { describeError, toolError } from "../errors.js";
-import { messageData, isoTime, messageHeader, truncateUtf8, truncationNote } from "../render.js";
+import { messageData, isoTime, renderMessage, truncateUtf8, truncationNote } from "../render.js";
 import { assembleThread, renderThread } from "../thread.js";
 import { READ_ONLY, type Register, deliveryItem, deliveryOf, idSchema, messageItem, ok, toItem, withCaller } from "./common.js";
 
@@ -57,10 +57,7 @@ export const registerReadTools: Register = (server, deps) => {
           body_bytes: message.size ?? (t?.total ?? 0),
           delivery: deliveryOf(message),
         };
-        const parts = [messageHeader(message), ""];
-        if (t === null) parts.push(`[non-text body: ${message.type ?? "?"}, ${message.size ?? 0} bytes]`);
-        else parts.push("Body:", t.text);
-        return ok(messageData(parts.join("\n")) + (t ? truncationNote(t) : ""), structured);
+        return ok(renderMessage(message, t?.text ?? null) + (t ? truncationNote(t) : ""), structured);
       }),
   );
 
@@ -177,7 +174,7 @@ export const registerReadTools: Register = (server, deps) => {
       inputSchema: z.strictObject({
         id: idSchema,
         filename: z.string().min(1).describe("attachment filename as listed on the message"),
-        max_inline_bytes: z.number().int().min(0).max(16_777_216).default(4_194_304),
+        max_inline_bytes: z.number().int().min(0).max(16_777_216).default(262_144),
       }),
       outputSchema: z.object({
         id: z.string(),

@@ -143,9 +143,14 @@ follow redirects; configure the final API URL directly.
 To save attachments directly to disk, add `FMSG_MCP_DOWNLOAD_DIR` to your stdio server's environment,
 for example `/home/you/Downloads/fmsg`. The optional `save_attachment` tool streams files into that
 folder without sending their bytes through model context. It accepts only a message ID and attachment
-filename, creates a new file such as `123-report.pdf`, and refuses to overwrite existing files.
-Unusual filenames are converted to portable names; use the returned `saved_to` path.
-HTTP clients use inline downloads or their host's file capabilities.
+filename and creates a new file such as `123-report.pdf`. Repeat saves use `123-report-1.pdf`,
+`123-report-2.pdf`, etc., leaving existing files untouched. Unusual filenames are converted to
+portable names; use the returned `saved_to` path. Streaming downloads can run longer than 60 seconds
+while making progress; a 60-second idle timeout detects stalled transfers.
+
+Inline downloads default to 256 KiB to keep file content manageable for the model. Use
+`save_attachment` for larger local files, or raise `max_inline_bytes` explicitly when your AI host
+can handle more inline content. HTTP clients use inline downloads or their host's file capabilities.
 
 Over stdio, missing or invalid configuration still allows hosts to discover the tools. Tool calls
 explain the configuration error and how to fix it; restart the MCP server after correcting settings.
