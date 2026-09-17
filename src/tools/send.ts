@@ -6,7 +6,7 @@ import { toolError } from "../errors.js";
 import { isoTime, participantsOf } from "../render.js";
 import { READ_ONLY, SENDS, type Register, idSchema, ok, withCaller } from "./common.js";
 
-const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled, so only send when the user has clearly asked to.";
+const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
 const attachmentInput = z.object({
   filename: z.string().regex(/^[A-Za-z0-9._-]+$/u, "letters, digits, dot, underscore, hyphen only"),

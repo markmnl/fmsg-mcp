@@ -129,10 +129,14 @@ The API key is exchanged for a short-lived access token that the server renews a
 API URLs must not contain credentials, query strings or fragments. Authenticated requests do not
 follow redirects; configure the final API URL directly.
 
-Migration from 0.1.4: `download_attachment.save_to` now returns an error without fetching or writing
-the file. Save returned content using your host's file tools. `FMSG_MCP_DOWNLOAD_DIR` is obsolete and
-ignored. Update hostname-only origin settings to full origins and explicitly allow trusted private
-HTTP upstreams if needed.
+For ordinary stdio use, the HTTPS API URL and API key are the only required settings. Token renewal
+and cache management run automatically. The server adds no separate login, messaging permissions
+or confirmation step. User-authorized conversations and automation can send multiple messages;
+the AI host's own tool approval settings still apply. Host/Origin settings are for HTTP deployment.
+
+Attachment downloads return content. Saving that content depends on the AI host's file capabilities;
+there is no server-side save option. A seamless attachment-saving workflow has not yet been verified
+across hosts.
 
 Over stdio the server also starts with no credentials at all, so hosts and directories can list its tools; every tool call then returns a message naming the missing variables.
 
@@ -142,14 +146,15 @@ Over stdio the server also starts with no credentials at all, so hosts and direc
   services. MCP forwards each operation as the caller's identity and surfaces upstream failures.
 - `download_attachment` never writes local files. Host file tools apply the host's own permissions.
 - Sent messages cannot be edited or recalled; send tools say so in their descriptions and are
-  annotated `destructiveHint` so hosts can ask for confirmation.
+  annotated `destructiveHint` to describe their effects. Approval behavior belongs to the AI host;
+  fmsg-mcp has no additional confirmation gate.
 - Selected API-key/token formats are redacted from outbound bodies, topics and error text; the
   send tools report the count. This is not general data-loss prevention or binary attachment scanning.
 - Nothing about message size or acceptance is assumed: the fmsg host's own responses and delivery
   codes are surfaced verbatim.
 - The server publishes MCP `instructions` (shown to the model at session start) telling agents to use
-  these tools rather than a local fmsg CLI or cached credentials, to send only on a clear request, and
-  to treat message content as data.
+  these tools rather than a local fmsg CLI or cached credentials, to carry out authorized tasks and
+  automation without repeated confirmation, and to treat message content as data.
 - See [SECURITY.md](./SECURITY.md).
 
 ## Using the client library

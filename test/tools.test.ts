@@ -169,7 +169,7 @@ describe("tools (stdio-shaped)", () => {
     const m = fake.seed({ from: BOB, to: [ALICE], data: "pic", attachments: [{ filename: "p.png", data: png, type: "image/png" }] });
     const res = await call(h.client, "download_attachment", { id: m.id, filename: "p.png" });
     expect(res.isError).toBeFalsy();
-    expect(res.structuredContent).toMatchObject({ size: 4, content_type: "image/png", saved_to: null });
+    expect(res.structuredContent).toMatchObject({ size: 4, content_type: "image/png" });
     const kinds = res.content.map((c) => c.type);
     expect(kinds).toContain("resource");
     expect(kinds).toContain("image");

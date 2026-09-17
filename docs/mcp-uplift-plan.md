@@ -6,7 +6,7 @@ Reviewed 2026-09-17 against version 0.1.4, commit `329b803`. Implementation is p
 
 Work package A is implemented locally as the first safety change:
 
-- Attachment downloads never write files. The portable confinement fallback in this plan was selected: delegate saving to the AI host's file tools. Legacy `save_to` calls return a migration error; `FMSG_MCP_DOWNLOAD_DIR` is ignored.
+- Attachment downloads never write files. The portable confinement fallback in this plan was selected: delegate saving to the AI host's file tools. Obsolete filesystem input/output/configuration fields have been removed rather than retaining a compatibility layer.
 - Non-loopback HTTP binds require allowed hosts. Origin checks use exact scheme/host/port, permitted browser preflight does not require a key, and actual requests still require each caller's own key. The upstream URL requires HTTPS outside loopback unless explicitly opted into a trusted private HTTP network; authenticated redirects and malformed download paths are refused. A [TLS proxy recipe](http-deployment.md) documents the boundary.
 - Credential exchange is deduplicated per key, idle cache entries expire before reuse and on periodic sweeps, and request identity survives cache eviction. Shutdown releases cached credentials; security documentation describes in-memory retention accurately. fmsg-webapi remains authoritative for messaging permissions and quotas.
 - Headers, previews, bodies, attachments, resources and partial errors are framed as untrusted data; tool/resource/HTTP logs and host errors use centralized secret redaction. Host error status, code and text survive the MCP boundary, except selected secret patterns. Irreversible-send guidance comes first; reaction annotations follow the external-send convention.
@@ -15,6 +15,16 @@ Work package A is implemented locally as the first safety change:
 Validation: typecheck, build and 59 local tests pass, including cross-caller tools/resources, revoked-key/socket behavior, CORS, redirects, file-write refusal, host-error preservation and cancellation. Real-stack isolation cases were added to the Docker acceptance suite; they are **not run locally because Docker is unavailable**. The proxy recipe was checked against Caddy documentation, but no live TLS proxy or AI-host prompt-injection evaluation was run here.
 
 Next is work package B. The known backlog/pending cursor defects, broader deadline/stream budgets and default wait duration are still outstanding; this first change does not establish the broad-integration definition of done. Hosted OAuth, compatibility certification and MCP Registry publication remain later workstreams. Existing npm publication and provenance are preserved.
+
+**Usability constraints — confirmed 2026-09-17**
+
+The maintainer is currently the only user. Remove obsolete fmsg-mcp fields and behavior directly; do not add compatibility shims or migration workflows without an actual consumer need. Protocol support needed by current MCP hosts remains an interoperability requirement, distinct from preserving this server's old API.
+
+Normal stdio setup should require only an HTTPS Web API URL and API key. Token exchange, renewal, key-cache expiration and caller isolation must work automatically. Do not add another login, message ACL, recipient policy, quota, approval tool, or per-message confirmation flow. Existing authorization covers the user's task or bounded automation; only unresolved intent or decisions should cause clarification. The AI host's own approval configuration still applies, and actual host behavior needs testing before claiming prompt-free operation.
+
+Assess each change for its effect on setup, successful task completion, latency and agent behavior. Keep message-data framing concise and permit using received content within an authorized task. HTTP deployment controls belong in operator setup and templates. Retain API-key integration when adding OAuth for hosts that require it; do not make users complete both onboarding paths unnecessarily.
+
+Attachment saving is a known usability gap in the first safety change. Delegating to host file tools removes arbitrary local writes, but some hosts lack those tools or cannot save embedded resources conveniently. Work package B must demonstrate a practical download/save workflow on claimed hosts, including larger attachments, before calling this painless. Success should require one user request and no manual base64 handling; the concrete transfer mechanism must follow the supported host capabilities. Do not restore unrestricted filesystem writes or assume upstream authentication confines access to local files.
 
 The target is: **an MCP-capable agent can connect through a documented, tested path, identify its fmsg account, and perform authorized messaging reliably without exposing credentials or granting unexpected capabilities.** Publish the tested compatibility envelope. An agent without an MCP client needs an adapter; no server can guarantee support for every proprietary host, policy, or future version.
 

@@ -140,7 +140,6 @@ describe("HTTP transport", () => {
       expect(http.provider.size).toBe(2);
       const saved = await call(alice, "download_attachment", { id: "1", filename: "x", save_to: "/tmp/x" });
       expect(saved.isError).toBe(true);
-      expect(text(saved)).toContain("stdio");
     } finally {
       await alice.close();
       await bob.close();

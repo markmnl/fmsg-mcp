@@ -26,8 +26,6 @@ export type Config = {
   directory?: Record<string, string>;
   /** Hard cap on a single wait_for_message call. */
   waitMaxSeconds: number;
-  /** @deprecated Filesystem saving was removed; this field is ignored. */
-  downloadDir?: string;
   http: HttpConfig;
 };
 

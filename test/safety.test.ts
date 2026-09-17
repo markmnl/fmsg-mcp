@@ -24,7 +24,7 @@ describe("MCP-owned safety boundaries", () => {
   });
   afterEach(async () => { await h.close(); await fake.stop(); vi.restoreAllMocks(); });
 
-  it("never writes or overwrites files, including symlink escapes and legacy save_to calls", async () => {
+  it("rejects filesystem destinations without writing or overwriting files", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "fmsg-safety-"));
     try {
       await mkdir(path.join(dir, "allowed"));
@@ -36,7 +36,6 @@ describe("MCP-owned safety boundaries", () => {
       for (const save_to of [target, path.join(dir, "allowed", "link", "existing.txt"), path.join(dir, "new", "a.txt"), "relative.txt", "C:\\outside\\a.txt"]) {
         const result = await call(h.client, "download_attachment", { id: m.id, filename: "a.txt", save_to });
         expect(result.isError).toBe(true);
-        expect(text(result)).toContain("host's file tools");
       }
       expect(await readFile(target, "utf8")).toBe("original");
       await expect(access(path.join(dir, "new"))).rejects.toThrow();

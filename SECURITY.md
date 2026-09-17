@@ -22,8 +22,8 @@ rather than a public issue.
   This does not detect arbitrary sensitive information or scan binary attachments.
 - Message content returned to the model is labelled as data, not instructions. Hosts should still
   treat tool output as untrusted.
-- Downloads return content and never write local files, including when a legacy caller supplies
-  `save_to`. Save files through the AI host's file tools and permissions.
+- Downloads return content and never write local files. Save files through the AI host's file tools
+  and permissions; the tool exposes no filesystem destination argument.
 - In HTTP mode terminate TLS in front of the server. `FMSG_MCP_ALLOWED_HOSTS` is required for
   non-loopback binds. Browser access validates the exact origin, including scheme and port; CORS
   preflight permission does not grant access to MCP operations.
@@ -31,5 +31,7 @@ rather than a public issue.
   network (`FMSG_ALLOW_INSECURE_HTTP=1`). Authenticated HTTP redirects are refused.
 - Tool annotations and message-data labels guide the AI host; they do not prove user approval or
   prevent prompt injection. The AI host owns tool-use permissions and authorization of automation.
+  fmsg-mcp adds no separate approval gate or per-message confirmation requirement. Guidance permits
+  ongoing work within the user's authorized task or automation.
 
 When reporting, please remove API keys, tokens, addresses and message bodies from logs.
