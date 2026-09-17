@@ -1,6 +1,20 @@
 **fmsg-mcp integration, safety, and trust uplift plan**
 
-Reviewed 2026-09-17 against version 0.1.4, commit `329b803`. This is a proposed implementation plan; the review did not change runtime behavior.
+Reviewed 2026-09-17 against version 0.1.4, commit `329b803`. Implementation is proceeding on `feature/mcp-integration-uplift`; status is recorded below.
+
+**Implementation status — 2026-09-17**
+
+Work package A is implemented locally as the first safety change:
+
+- Attachment downloads never write files. The portable confinement fallback in this plan was selected: delegate saving to the AI host's file tools. Legacy `save_to` calls return a migration error; `FMSG_MCP_DOWNLOAD_DIR` is ignored.
+- Non-loopback HTTP binds require allowed hosts. Origin checks use exact scheme/host/port, permitted browser preflight does not require a key, and actual requests still require each caller's own key. The upstream URL requires HTTPS outside loopback unless explicitly opted into a trusted private HTTP network; authenticated redirects and malformed download paths are refused. A [TLS proxy recipe](http-deployment.md) documents the boundary.
+- Credential exchange is deduplicated per key, idle cache entries expire before reuse and on periodic sweeps, and request identity survives cache eviction. Shutdown releases cached credentials; security documentation describes in-memory retention accurately. fmsg-webapi remains authoritative for messaging permissions and quotas.
+- Headers, previews, bodies, attachments, resources and partial errors are framed as untrusted data; tool/resource/HTTP logs and host errors use centralized secret redaction. Host error status, code and text survive the MCP boundary, except selected secret patterns. Irreversible-send guidance comes first; reaction annotations follow the external-send convention.
+- Already-cancelled waits fail before upstream work; request deadlines remain enabled with caller signals. HTTP cancellation closes wait sockets. WebSocket events cause a fresh protected message read, so an existing socket cannot authorize content after upstream revocation.
+
+Validation: typecheck, build and 59 local tests pass, including cross-caller tools/resources, revoked-key/socket behavior, CORS, redirects, file-write refusal, host-error preservation and cancellation. Real-stack isolation cases were added to the Docker acceptance suite; they are **not run locally because Docker is unavailable**. The proxy recipe was checked against Caddy documentation, but no live TLS proxy or AI-host prompt-injection evaluation was run here.
+
+Next is work package B. The known backlog/pending cursor defects, broader deadline/stream budgets and default wait duration are still outstanding; this first change does not establish the broad-integration definition of done. Hosted OAuth, compatibility certification and MCP Registry publication remain later workstreams. Existing npm publication and provenance are preserved.
 
 The target is: **an MCP-capable agent can connect through a documented, tested path, identify its fmsg account, and perform authorized messaging reliably without exposing credentials or granting unexpected capabilities.** Publish the tested compatibility envelope. An agent without an MCP client needs an adapter; no server can guarantee support for every proprietary host, policy, or future version.
 

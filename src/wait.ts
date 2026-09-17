@@ -1,7 +1,8 @@
 import type WebSocket from "ws";
-import { FmsgClient } from "./client/client.js";
+import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import { compareMessageIds, maxMessageId, minMessageId } from "./client/message-id.js";
 import type { FmsgMessage } from "./client/types.js";
+import { safeErrorMessage } from "./client/redact.js";
 import { openFmsgWebSocket, parseWsEvent } from "./client/ws.js";
 
 export type WaitOptions = {
@@ -52,6 +53,7 @@ export async function waitForMessage(
   signal?: AbortSignal,
   deps: Deps = {},
 ): Promise<WaitResult> {
+  signal?.throwIfAborted();
   const start = Date.now();
   const deadline = start + options.timeoutMs;
   const maxBatch = options.maxBatch ?? 20;
@@ -183,14 +185,13 @@ export async function waitForMessage(
       note = "cancelled";
       finish();
     };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) return onAbort();
-
     const deadlineTimer = setTimeout(() => {
       if (batch.length && settleTimer) note = "the time limit cut the settle window short";
       finish();
     }, Math.max(0, deadline - Date.now()));
     const tickTimer = setInterval(() => options.onTick?.(Date.now() - start), 20_000);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) return onAbort();
 
     const consider = async (m: FmsgMessage) => {
       if (finished || seen.has(m.id)) return;
@@ -209,7 +210,7 @@ export async function waitForMessage(
       try {
         root = await rootOf(m.id);
       } catch (error) {
-        if (!finished) unclassified.push({ id: m.id, from: m.from, error: error instanceof Error ? error.message : String(error) });
+        if (!finished) unclassified.push({ id: m.id, from: m.from, error: safeErrorMessage(error) });
         return;
       } finally {
         inflight.delete(m.id);
@@ -248,6 +249,26 @@ export async function waitForMessage(
       void catchUp();
     };
 
+    const considerPushed = async (id: string) => {
+      if (finished || seen.has(id) || inflight.has(id)) return;
+      inflight.set(id, "");
+      try {
+        // A socket was authorized at its handshake. Re-read through a protected
+        // route so an old connection cannot bypass upstream grant revocation.
+        const message = await client.getMessage(id, signal);
+        inflight.delete(id);
+        await consider(message);
+      } catch (error) {
+        if (finished) return;
+        if (error instanceof FmsgHttpError && ([401, 403].includes(error.status) || error.path === "/fmsg/token")) {
+          fail(error);
+        } else {
+          seen.add(id);
+          unclassified.push({ id, from: "", error: safeErrorMessage(error) });
+        }
+      } finally { inflight.delete(id); }
+    };
+
     const open = deps.openSocket ?? openFmsgWebSocket;
     open(client)
       .then((ws) => {
@@ -270,7 +291,7 @@ export async function waitForMessage(
         });
         ws.on("message", (raw) => {
           const event = parseWsEvent(raw);
-          if (event?.type === "new_msg" && event.data) void consider(event.data);
+          if (event?.type === "new_msg" && event.data) void considerPushed(event.data.id);
         });
         ws.on("error", () => {
           clearTimeout(openTimer);

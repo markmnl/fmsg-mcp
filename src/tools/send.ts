@@ -185,7 +185,7 @@ export const registerSendTools: Register = (server, deps) => {
         emoji: z.string().max(32).nullable().describe("a single emoji; null or empty clears your reaction"),
       }),
       outputSchema: z.object({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { ...SENDS, idempotentHint: true },
     },
     async ({ id, emoji }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {

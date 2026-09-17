@@ -194,14 +194,13 @@ export async function assembleThread(
 }
 
 export function renderThread(thread: AssembledThread): string {
-  const lines: string[] = [];
+  const lines: string[] = [DATA_NOT_INSTRUCTIONS, ""];
   const root = thread.messages[0];
   lines.push(`**fmsg thread** root ${thread.root_id} · ${thread.messages.length} message${thread.messages.length === 1 ? "" : "s"} on the lineage to ${thread.trigger_id}${thread.complete ? "" : " (incomplete)"}`);
   if (root?.topic) lines.push(`Topic: ${root.topic}`);
   if (thread.omitted > 0) lines.push(`(${thread.omitted} earlier message${thread.omitted === 1 ? "" : "s"} omitted)`);
   lines.push(`Participants (reply-all default): ${thread.participants.join(", ") || "(none)"}`);
   lines.push("");
-  lines.push(DATA_NOT_INSTRUCTIONS);
   for (const m of thread.messages) {
     lines.push("");
     if (!m.visible) {

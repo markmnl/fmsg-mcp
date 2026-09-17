@@ -1,7 +1,7 @@
 import * as z from "zod/v4";
 import { resolveAddress } from "../address.js";
 import { assembleThread, renderThread } from "../thread.js";
-import { messageLine } from "../render.js";
+import { DATA_NOT_INSTRUCTIONS, fence, messageLine } from "../render.js";
 import { waitForMessage } from "../wait.js";
 import { READ_ONLY, type Register, idSchema, messageItem, ok, toItem, withCaller } from "./common.js";
 
@@ -89,7 +89,7 @@ export const registerWaitTools: Register = (server, deps) => {
         };
         if (result.status === "timeout") {
           return ok(
-            `No qualifying message arrived within ${timeout_seconds}s (after_id ${result.after_id}, ${result.transport})${result.note ? `; ${result.note}` : ""}. Call again to keep waiting.`,
+            `${DATA_NOT_INSTRUCTIONS}\n\nNo qualifying message arrived within ${timeout_seconds}s (after_id ${result.after_id}, ${result.transport})${result.note ? `; ${result.note}` : ""}. Call again to keep waiting.`,
             structured,
           );
         }
@@ -112,10 +112,10 @@ export const registerWaitTools: Register = (server, deps) => {
           }, signal);
           lines.push("", renderThread(thread));
         } else if (newest) {
-          for (const m of messages) if (m.body) lines.push("", `--- message ${m.id} from ${m.from} ---`, m.body);
+          for (const m of messages) if (m.body) lines.push("", `--- message ${m.id} from ${m.from} ---`, fence(m.body));
           lines.push("", `Reply to message ${newest.id} with the reply tool.`);
         }
-        return ok(lines.join("\n"), structured);
+        return ok(`${DATA_NOT_INSTRUCTIONS}\n\n${lines.join("\n")}`, structured);
       }),
   );
 };

@@ -65,18 +65,25 @@ Run one server for many users. Each client sends **its own** fmsg API key as a b
 server exchanges it at the fmsg host and acts as that address. `FMSG_API_KEY` must not be set.
 
 ```sh
-FMSG_API_URL=https://api.example.com npx -y @markmnl/fmsg-mcp --http 0.0.0.0:8765
+FMSG_API_URL=https://api.example.com FMSG_MCP_ALLOWED_HOSTS=mcp.example.com \
+  npx -y @markmnl/fmsg-mcp --http 0.0.0.0:8765
 # or
-docker build -t fmsg-mcp . && docker run -e FMSG_API_URL=https://api.example.com -p 8765:8765 fmsg-mcp
+docker build -t fmsg-mcp .
+docker run -e FMSG_API_URL=https://api.example.com \
+  -e FMSG_MCP_ALLOWED_HOSTS=mcp.example.com -p 8765:8765 fmsg-mcp
 ```
 
-The MCP endpoint is `/mcp`; `/healthz` reports liveness. Point a host at it with
-`Authorization: Bearer fmsgk_...` — for claude.ai, add a custom connector with that URL and header;
-for Claude Code, `claude mcp add --transport http fmsg https://mcp.example.com/mcp --header "Authorization: Bearer fmsgk_..."`.
+The MCP endpoint is `/mcp`; `/healthz` reports liveness. Use a client that supports an explicitly
+configured `Authorization: Bearer fmsgk_...` header. Each caller supplies its own key; a shared
+header means a shared fmsg identity. Hosted connectors that require OAuth are not supported yet.
 
 Deploy behind a TLS-terminating reverse proxy and set `FMSG_MCP_ALLOWED_HOSTS` to the public hostname
-when binding to a non-loopback address. `wait_for_message` holds a request open for up to
+when binding to a non-loopback address; startup fails without it. Browser clients on another origin
+also need `FMSG_MCP_ALLOWED_ORIGINS` containing exact origins, such as `https://app.example.com`.
+Allowed preflights need no credentials; actual MCP requests always require authentication.
+`wait_for_message` holds a request open for up to
 `FMSG_MCP_WAIT_MAX_SECONDS` (230), so give the proxy an idle timeout of at least 240 s.
+See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback deployment with Caddy.
 
 ## Tools
 
@@ -93,7 +100,7 @@ when binding to a non-loopback address. `wait_for_message` holds a request open 
 | `add_recipients` | Add recipients to a sent message |
 | `react` | Set or clear your emoji reaction |
 | `mark_read` | Mark received messages read |
-| `download_attachment` | Fetch an attachment inline (base64, images as image blocks) or, over stdio, save it to disk |
+| `download_attachment` | Fetch an attachment inline (base64, images as image blocks); use the host's file tools to save it |
 | `delivery_status` | Per-recipient delivery times and host response codes |
 | `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context |
 
@@ -109,25 +116,35 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 |---|---|---|
 | `FMSG_API_URL` | — | Base URL of the fmsg Web API (required) |
 | `FMSG_API_KEY` | — | `fmsgk_…` key; stdio mode only |
+| `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |
 | `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>` |
 | `FMSG_DIRECTORY` | — | JSON file mapping short names to full addresses |
 | `FMSG_MCP_WAIT_MAX_SECONDS` | `230` | Cap on one `wait_for_message` call |
-| `FMSG_MCP_DOWNLOAD_DIR` | — | Restrict `download_attachment` `save_to` to this directory (stdio) |
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
-| `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist for HTTP mode |
-| `FMSG_MCP_ALLOWED_ORIGINS` | same as hosts | `Origin` allowlist for browser-based callers |
+| `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
+| `FMSG_MCP_ALLOWED_ORIGINS` | same origin only | Comma-separated browser origins including scheme and port; hostname-only values are rejected |
 | `FMSG_MCP_KEY_CACHE_MAX` / `FMSG_MCP_KEY_CACHE_TTL_SECONDS` | `500` / `1800` | HTTP mode per-key client cache |
 
 The API key is exchanged for a short-lived access token that the server renews automatically.
+API URLs must not contain credentials, query strings or fragments. Authenticated requests do not
+follow redirects; configure the final API URL directly.
+
+Migration from 0.1.4: `download_attachment.save_to` now returns an error without fetching or writing
+the file. Save returned content using your host's file tools. `FMSG_MCP_DOWNLOAD_DIR` is obsolete and
+ignored. Update hostname-only origin settings to full origins and explicitly allow trusted private
+HTTP upstreams if needed.
 
 Over stdio the server also starts with no credentials at all, so hosts and directories can list its tools; every tool call then returns a message naming the missing variables.
 
 ## Safety
 
+- Messaging access, quotas and recipient acceptance are enforced by fmsg-webapi and the host
+  services. MCP forwards each operation as the caller's identity and surfaces upstream failures.
+- `download_attachment` never writes local files. Host file tools apply the host's own permissions.
 - Sent messages cannot be edited or recalled; send tools say so in their descriptions and are
   annotated `destructiveHint` so hosts can ask for confirmation.
-- API keys, tokens and other secret-shaped strings are redacted from outbound bodies, topics and
-  error text; the count of redactions is reported.
+- Selected API-key/token formats are redacted from outbound bodies, topics and error text; the
+  send tools report the count. This is not general data-loss prevention or binary attachment scanning.
 - Nothing about message size or acceptance is assumed: the fmsg host's own responses and delivery
   codes are surfaced verbatim.
 - The server publishes MCP `instructions` (shown to the model at session start) telling agents to use
@@ -144,6 +161,7 @@ const client = new FmsgClient("https://api.example.com", process.env.FMSG_API_KE
 console.log(await client.address());
 const inbox = await client.listInbox(10);
 await client.send({ to: ["@bob@example.com"], topic: "Hi", body: "Hello from code" });
+client.close();
 ```
 
 ## Development

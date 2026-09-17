@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { FmsgClient } from "./client/client.js";
+import { safeErrorMessage } from "./client/redact.js";
 import { loadConfig, DEFAULT_HTTP_PORT, type ConfigOverrides } from "./config.js";
 import { type CallerProvider, StaticCallerProvider, UnconfiguredCallerProvider } from "./context.js";
 import { createHttpServer, MCP_PATH } from "./http.js";
@@ -24,11 +25,12 @@ Options (HTTP mode):
 Environment:
   FMSG_API_URL               base URL of the fmsg Web API (required)
   FMSG_API_KEY               fmsgk_... key (stdio mode only)
+  FMSG_ALLOW_INSECURE_HTTP   1 to allow a trusted private HTTP API outside loopback
   FMSG_DEFAULT_DOMAIN        lets short names resolve: bob -> @bob@<domain>
   FMSG_DIRECTORY             JSON file mapping short names to @user@domain
   FMSG_MCP_WAIT_MAX_SECONDS  cap on one wait_for_message call (default 230)
-  FMSG_MCP_DOWNLOAD_DIR      restrict download_attachment save_to (stdio)
   FMSG_MCP_ALLOWED_HOSTS     comma-separated Host header allowlist (HTTP, non-loopback)
+  FMSG_MCP_ALLOWED_ORIGINS   exact browser origins, including scheme and port
 `;
 
 type Args = { mode: "stdio" | "http" | "version" | "help"; overrides: ConfigOverrides };
@@ -68,7 +70,7 @@ async function main(): Promise<void> {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(safeErrorMessage(error));
     process.exit(2);
   }
   if (args.mode === "version") {
@@ -84,7 +86,7 @@ async function main(): Promise<void> {
   try {
     config = loadConfig(process.env, transport, args.overrides, { requireCredentials: false });
   } catch (error) {
-    console.error(`fmsg-mcp: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`fmsg-mcp: ${safeErrorMessage(error)}`);
     process.exit(2);
   }
 
@@ -92,8 +94,8 @@ async function main(): Promise<void> {
     const cfg = config;
     let provider: CallerProvider;
     if (cfg.apiUrl && cfg.apiKey) {
-      provider = new StaticCallerProvider(new FmsgClient(cfg.apiUrl, cfg.apiKey));
-      console.error(`fmsg-mcp ${VERSION} serving stdio for ${cfg.apiUrl}`);
+      provider = new StaticCallerProvider(new FmsgClient(cfg.apiUrl, cfg.apiKey, { allowInsecureHttp: cfg.allowInsecureHttp }));
+      console.error(safeErrorMessage(`fmsg-mcp ${VERSION} serving stdio for ${cfg.apiUrl}`));
     } else {
       const missing = [!cfg.apiUrl && "FMSG_API_URL", !cfg.apiKey && "FMSG_API_KEY"].filter(Boolean).join(" and ");
       const reason = `fmsg-mcp is not configured: set ${missing} (the fmsg Web API base URL and an fmsgk_... API key for the address this server sends as)`;
@@ -111,7 +113,10 @@ async function main(): Promise<void> {
       const address = await knownAddress();
       return createFmsgMcpServer(provider, cfg, address ? { address } : {});
     });
-    const stop = () => void handle.close().finally(() => process.exit(0));
+    const stop = () => {
+      provider.close?.();
+      void handle.close().finally(() => process.exit(0));
+    };
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
     return;
@@ -124,7 +129,7 @@ async function main(): Promise<void> {
   });
   const addr = server.address();
   const shown = typeof addr === "object" && addr ? `${addr.address}:${addr.port}` : `${config.http.host}:${config.http.port}`;
-  console.error(`fmsg-mcp ${VERSION} serving Streamable HTTP at http://${shown}${MCP_PATH} for ${config.apiUrl}`);
+  console.error(safeErrorMessage(`fmsg-mcp ${VERSION} serving Streamable HTTP at http://${shown}${MCP_PATH} for ${config.apiUrl}`));
   const stop = () => void close().finally(() => process.exit(0));
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
@@ -142,7 +147,7 @@ function invokedDirectly(): boolean {
 
 if (invokedDirectly() || process.env.FMSG_MCP_MAIN === "1") {
   main().catch((error) => {
-    console.error(`fmsg-mcp: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`fmsg-mcp: ${safeErrorMessage(error)}`);
     process.exit(1);
   });
 }

@@ -42,6 +42,8 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "README.md",
+    "SECURITY.md",
+    "docs/http-deployment.md",
     "LICENSE",
     "server.json"
   ],

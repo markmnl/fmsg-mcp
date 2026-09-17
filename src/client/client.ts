@@ -1,6 +1,7 @@
 import { normalizeFmsgAddress } from "../address.js";
 import { normalizeMessageId, parseFmsgJson, stringifyWithIds } from "./message-id.js";
 import { redactSecrets } from "./redact.js";
+import { normalizeApiUrl } from "./url.js";
 import type {
   AccessToken,
   Attachment,
@@ -19,6 +20,8 @@ export type FmsgClientOptions = {
   refreshMarginMs?: number;
   /** Per-request timeout (default 60 s). */
   timeoutMs?: number;
+  /** Allow HTTP outside loopback only on an explicitly trusted network. */
+  allowInsecureHttp?: boolean;
 };
 
 /** An HTTP error from the fmsg Web API, with the status and the host's own error text. */
@@ -31,7 +34,8 @@ export class FmsgHttpError extends Error {
     /** Machine-readable `code` from the body, when the host sends one (thread routes). */
     readonly code?: string,
   ) {
-    super(message);
+    super(redactSecrets(message).text);
+    if (this.code) this.code = redactSecrets(this.code).text;
     this.name = "FmsgHttpError";
   }
 }
@@ -54,7 +58,7 @@ async function readError(response: Response): Promise<{ message: string; code?: 
     const message = typeof parsed.error === "string" ? parsed.error : `HTTP ${response.status}`;
     return typeof parsed.code === "string" ? { message, code: parsed.code } : { message };
   } catch {
-    return { message: raw.slice(0, 300) };
+    return { message: raw };
   }
 }
 
@@ -70,14 +74,14 @@ export class FmsgClient {
   readonly apiUrl: string;
   private token?: AccessToken;
   private tokenPromise?: Promise<AccessToken>;
+  private readonly lifetime = new AbortController();
 
   constructor(
     apiUrl: string,
-    private readonly apiKey: string,
+    private apiKey: string,
     private readonly options: FmsgClientOptions = {},
   ) {
-    this.apiUrl = apiUrl.replace(/\/+$/u, "");
-    if (!/^https?:\/\//u.test(this.apiUrl)) throw new Error("FMSG_API_URL must be an http(s) URL");
+    this.apiUrl = normalizeApiUrl(apiUrl, options.allowInsecureHttp);
     if (!apiKey.startsWith("fmsgk_")) throw new Error("fmsg API key must start with fmsgk_");
   }
 
@@ -91,27 +95,40 @@ export class FmsgClient {
   }
 
   async getToken(force = false): Promise<AccessToken> {
+    this.lifetime.signal.throwIfAborted();
     const margin = this.options.refreshMarginMs ?? 300_000;
+    if (this.tokenPromise) return this.tokenPromise;
     if (!force && this.token && this.token.expiresAtMs - margin > Date.now()) return this.token;
-    if (!force && this.tokenPromise) return this.tokenPromise;
     this.tokenPromise = this.exchangeToken();
     try {
       this.token = await this.tokenPromise;
+      this.lifetime.signal.throwIfAborted();
       return this.token;
+    } catch (error) {
+      this.token = undefined;
+      throw error;
     } finally {
       this.tokenPromise = undefined;
     }
+  }
+
+  /** Release credentials and cancel outstanding work when the client is no longer used. */
+  close(): void {
+    this.lifetime.abort();
+    this.apiKey = "";
+    this.token = undefined;
   }
 
   private async exchangeToken(): Promise<AccessToken> {
     const response = await this.fetchImpl(`${this.apiUrl}/fmsg/token`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.apiKey}` },
-      signal: AbortSignal.timeout(this.options.timeoutMs ?? 60_000),
+      redirect: "error",
+      signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(this.options.timeoutMs ?? 60_000)]),
     });
     if (!response.ok) {
-      const { message } = await readError(response);
-      throw new FmsgHttpError(`token exchange failed: ${redactSecrets(message).text}`, response.status, "POST", "/fmsg/token");
+      const { message, code } = await readError(response);
+      throw new FmsgHttpError(`token exchange failed: ${redactSecrets(message).text}`, response.status, "POST", "/fmsg/token", code);
     }
     const body = (await response.json()) as { access_token?: unknown; expires_in?: unknown; expires_at?: unknown };
     if (typeof body.access_token !== "string") throw new Error("token response has no access_token");
@@ -126,12 +143,16 @@ export class FmsgClient {
   }
 
   private async request(path: string, init: RequestInit = {}, retry401 = true): Promise<Response> {
+    init.signal?.throwIfAborted();
     const token = await this.getToken();
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${token.accessToken}`);
-    const signal = init.signal ?? AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
-    const response = await this.fetchImpl(`${this.apiUrl}${path}`, { ...init, headers, signal });
+    const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
+    const signal = AbortSignal.any([this.lifetime.signal, timeout, ...(init.signal ? [init.signal] : [])]);
+    signal.throwIfAborted();
+    const response = await this.fetchImpl(`${this.apiUrl}${path}`, { ...init, headers, signal, redirect: "error" });
     if (response.status === 401 && retry401) {
+      await response.body?.cancel();
       await this.getToken(true);
       return this.request(path, init, false);
     }
@@ -216,7 +237,13 @@ export class FmsgClient {
 
   /** Download by a `download` path returned from thread/messages (`/fmsg/...`). */
   async downloadPath(path: string, signal?: AbortSignal): Promise<{ data: Uint8Array; contentType?: string }> {
-    if (!path.startsWith("/fmsg/") || path.includes("://")) throw new Error(`refusing to download non-fmsg path ${path}`);
+    // Paths come from upstream message data. Reject normalization tricks and
+    // routes outside the documented body/attachment download endpoints.
+    if (!/^\/fmsg\/[0-9]+\/(?:data|attach\/[^/?#\\]+)$/u.test(path) || /[\u0000-\u0020\\]/u.test(path)) {
+      throw new Error("refusing an invalid fmsg download path");
+    }
+    const normalized = new URL(path, "https://example.com");
+    if (normalized.pathname !== path || normalized.search || normalized.hash) throw new Error("refusing an invalid fmsg download path");
     const response = await this.request(path, { signal });
     const contentType = response.headers.get("content-type") ?? undefined;
     return { data: new Uint8Array(await response.arrayBuffer()), ...(contentType ? { contentType } : {}) };
@@ -283,8 +310,8 @@ export class FmsgClient {
       from,
       to: input.to,
       type: input.type ?? "text/markdown; charset=utf-8",
-      data: input.body,
-      topic: input.pid ? "" : (input.topic ?? ""),
+      data: redactSecrets(input.body).text,
+      topic: input.pid ? "" : redactSecrets(input.topic ?? "").text,
       ...(input.important ? { important: true } : {}),
       ...(input.noReply ? { no_reply: true } : {}),
     };
