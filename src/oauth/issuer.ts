@@ -85,8 +85,9 @@ export class OAuthIssuer {
       const claim = payload[this.config.addressClaim];
       const address = typeof claim === "string" ? normalizeFmsgAddress(claim) : undefined;
       const scopes = parseScopes(payload.scope);
-      if (audience !== this.config.resourceUrl || !address || !scopes || !Number.isFinite(payload.exp)) throw invalidToken();
-      return { address, scopes, expiresAtMs: payload.exp! * 1000, clientId: typeof payload.client_id === "string" ? payload.client_id : "oauth-client" };
+      const expiresAtMs = Math.floor(payload.exp! * 1000);
+      if (audience !== this.config.resourceUrl || !address || !scopes || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) throw invalidToken();
+      return { address, scopes, expiresAtMs, clientId: typeof payload.client_id === "string" ? payload.client_id : "oauth-client" };
     } catch (error) {
       if (error instanceof OAuthRequestError) throw error;
       if (error instanceof errors.JOSEError) throw invalidToken();
@@ -113,6 +114,9 @@ export class OAuthIssuer {
         scope: requestedScopes.join(" "),
       }),
     });
+    // The subject can expire during discovery/exchange or response transfer.
+    // That is a normal reconnect, not an operator configuration failure.
+    if (identity.expiresAtMs <= Date.now()) throw invalidToken();
     let body: Record<string, unknown>;
     try { body = await response.json() as Record<string, unknown>; } catch { throw this.configurationError("invalid exchange response"); }
     if (!body || !response.ok) {
@@ -140,7 +144,10 @@ export class OAuthIssuer {
       const expiresAtMs = Math.min(startedAt + body.expires_in * 1000, claims.exp * 1000, identity.expiresAtMs, startedAt + EXCHANGE_CACHE_MAX_MS);
       if (expiresAtMs <= Date.now()) throw new Error();
       return { accessToken: body.access_token, address: identity.address, expiresAtMs };
-    } catch { throw this.configurationError("exchange returned an unexpected token or scope"); }
+    } catch {
+      if (identity.expiresAtMs <= Date.now()) throw invalidToken();
+      throw this.configurationError("exchange returned an unexpected token or scope");
+    }
   }
 
   close(): void { this.lifetime.abort(); this.config.clientSecret = ""; this.metadata = undefined; this.jwks = undefined; }

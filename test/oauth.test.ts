@@ -234,6 +234,13 @@ describe("HTTP OAuth", () => {
     expect((await issuer.exchange(short, shortIdentity, new AbortController().signal)).expiresAtMs).toBeLessThanOrEqual(shortIdentity.expiresAtMs);
   });
 
+  it("returns 401 if the incoming token expires while exchange is in flight", async () => {
+    const token = await idp.token();
+    const identity = await issuer.verify(token);
+    idp.onExchange = async () => { vi.spyOn(Date, "now").mockReturnValue(identity.expiresAtMs + 1); };
+    await expect(issuer.exchange(token, identity, new AbortController().signal)).rejects.toMatchObject({ status: 401 });
+  });
+
   it("refuses exchange contract violations before making a Web API call", async () => {
     const token = await idp.token(); const identity = await issuer.verify(token);
     for (const override of [{ refresh_token: "not-allowed" }, { access_token: token }, { expires_in: 0 }, { scope: "owner" }]) {
