@@ -99,10 +99,10 @@ export type Thread = {
 };
 
 export type AccessToken = {
-  accessToken: string;
-  /** fmsg address from the JWT `sub` claim. */
-  address: string;
-  expiresAtMs: number;
+  readonly accessToken: string;
+  /** Authenticated fmsg address supplied by the provider; not necessarily a JWT sub. */
+  readonly address: string;
+  readonly expiresAtMs: number;
 };
 
 export type OutboundAttachment = {

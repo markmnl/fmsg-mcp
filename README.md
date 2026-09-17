@@ -190,6 +190,11 @@ client.close();
 Its result includes the replacement count (`redactions`) and transmitted `topic`. Attachments are
 unchanged. Use `streamAttachment()` to consume large files incrementally; consume or cancel its stream.
 
+Applications with their own authorization integration can pass a `TokenProvider` instead of an
+API-key string. The client shares renewal across concurrent requests and keeps the authenticated
+address fixed. See the [token-provider contract](./docs/token-providers.md). This library interface
+does not enable hosted OAuth in the MCP executable yet.
+
 ## Development
 
 ```sh

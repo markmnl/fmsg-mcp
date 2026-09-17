@@ -4,8 +4,9 @@ import { normalizeMessageId, parseFmsgJson } from "./message-id.js";
 import type { FmsgMessage, WsEvent } from "./types.js";
 
 /** Open the event WebSocket, authenticating with the bearer JWT in the header. */
-export async function openFmsgWebSocket(client: FmsgClient): Promise<WebSocket> {
-  const token = await client.getToken();
+export async function openFmsgWebSocket(client: FmsgClient, signal?: AbortSignal): Promise<WebSocket> {
+  const token = await client.getToken(false, signal);
+  signal?.throwIfAborted();
   const url = new URL(client.apiUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/+$/u, "")}/fmsg/ws`;

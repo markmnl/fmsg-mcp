@@ -29,6 +29,11 @@ Support claims must name tested clients and versions; agents without MCP need an
 Ship A first, then B–D. Plan E with the host/account-system maintainer. Release work in F can proceed
 earlier; hosted-service promises depend on verified OAuth and operational behavior.
 
+E's [client token-provider foundation](docs/token-providers.md) supports renewable upstream credentials
+and local isolation tests. Incoming OAuth validation, discovery, token exchange and actual hosted-client
+acceptance remain open. Coordinate exchanged-token scope enforcement with the Web API before enabling
+OAuth: messaging credentials must not inherit owner credential-management privileges.
+
 Release-triggered npm publication, OIDC trusted publishing, provenance generation and version
 synchronization already exist in [publish.yml](.github/workflows/publish.yml). Preserve them.
 [CI](https://github.com/markmnl/fmsg-mcp/actions/workflows/tests.yml) already covers Node 22/24,

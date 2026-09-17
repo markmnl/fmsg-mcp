@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
+import type { AccessToken } from "../src/client/types.js";
 
 export type StoredMessage = {
   id: string;
@@ -80,6 +81,8 @@ export class FakeFmsgServer {
     ["fmsgk_agent_secret", "@Alice_ChatGPT@example.com"],
   ]);
   private readonly tokenKeys = new Map<string, string>();
+  /** Registered provider fixtures only; this does not simulate JWT verification or OAuth. */
+  readonly providerTokens = new Map<string, AccessToken>();
   /** Fail the next request whose path matches, with this status and message. */
   failNext: { match: RegExp; status: number; error: string; code?: string } | undefined;
   /** Force the next protected request to answer 401 (expired JWT simulation). */
@@ -255,6 +258,8 @@ export class FakeFmsgServer {
   }
 
   private authenticatedSubject(token: string | undefined): string | undefined {
+    const provided = token ? this.providerTokens.get(token) : undefined;
+    if (provided) return provided.expiresAtMs > Date.now() ? provided.address : undefined;
     const subject = subjectOf(token);
     const key = token ? this.tokenKeys.get(token) : undefined;
     return subject && key && this.apiKeys.get(key) === subject ? subject : undefined;

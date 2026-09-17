@@ -41,7 +41,7 @@ export type WaitResult = {
   note: string | null;
 };
 
-type Deps = { openSocket?: (client: FmsgClient) => Promise<WebSocket> };
+type Deps = { openSocket?: (client: FmsgClient, signal?: AbortSignal) => Promise<WebSocket> };
 
 /**
  * Block until the next qualifying inbound message (plus any that arrive on the
@@ -285,7 +285,7 @@ export async function waitForMessage(
     };
 
     const open = deps.openSocket ?? openFmsgWebSocket;
-    open(client)
+    open(client, retrySignal)
       .then((ws) => {
         if (finished) {
           ws.close();

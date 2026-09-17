@@ -46,6 +46,7 @@
     "CHANGELOG.md",
     "ROADMAP.md",
     "docs/http-deployment.md",
+    "docs/token-providers.md",
     "LICENSE",
     "server.json"
   ],
