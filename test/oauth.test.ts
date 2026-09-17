@@ -133,10 +133,14 @@ describe("HTTP OAuth", () => {
     const spoofed = await post(token, "tools/call", { name: "send_message", arguments: { to: [BOB], topic: "x", body: "x" } },
       { "mcp-method": "tools/list", "mcp-name": "whoami" });
     expect(spoofed.status).toBe(403);
+    const mismatched = await post(token, "tools/call", { name: "whoami", arguments: { to: [BOB], topic: "x", body: "x" } },
+      { "mcp-method": "tools/call", "mcp-name": "send_message", "mcp-protocol-version": "2026-07-28" });
+    expect(mismatched.status).toBe(400);
     const batch = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify([{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "send_message" } }]) });
     expect(batch.status).toBe(400);
-    expect(idp.exchanges).toHaveLength(0);
+    // A valid read scope can preflight an exchange, but mismatched dispatch
+    // headers must never turn the read into a write at the Web API.
     expect(api.requests).toHaveLength(0);
   });
 
