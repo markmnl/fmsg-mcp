@@ -10,22 +10,44 @@ attachments and wait for replies, through a deployed
 [fmsg Web API](https://github.com/markmnl/fmsg-webapi). Connect through stdio in hosts such as
 Claude Code, Claude Desktop, Cursor and VS Code, or through HTTP using API-key headers or configured OAuth.
 
+Use your choice of fmsg hosting provider, or self-host. No hosting provider or identity provider
+is built in.
+
 - **stdio** for local hosts: one address per server process, configured by two environment variables.
 - **Streamable HTTP** for shared or remote deployments: one endpoint serving many users, each
   authenticated by their own fmsg API key or OAuth connection.
 - The fmsg Web API client is exported for reuse: `import { FmsgClient } from "@markmnl/fmsg-mcp/client"`.
 
-## 1. Get an fmsg address and API key
+## 1. Choose a connection
 
-Connecting to an existing OAuth-enabled endpoint? Add its MCP URL to your host and sign in;
-you can skip the API-key setup below. Operators can enable this with [HTTP OAuth](docs/oauth.md).
+### OAuth: connect and sign in
+
+Get an OAuth-enabled MCP URL from your fmsg hosting provider, add it to your AI host, and sign in.
+You do not need an API key or a local installation for this connection. Your AI host must support
+the authorization server's client registration method; see [OAuth onboarding](docs/oauth.md#discovery-and-client-onboarding).
+Operators can enable this with [HTTP OAuth](docs/oauth.md).
+
+### API key: use locally or over HTTP
 
 You send as an fmsg address, authenticated by an API key (`fmsgk_…`) issued by your fmsg host:
 
-- **No host yet?** Create an account at a public fmsg host such as [fmsg.io](https://fmsg.io) and
-  add an agent (sub-account) to get an API URL and key.
+- **Using a hosting provider?** Create an account with an fmsg hosting provider and obtain an
+  API URL and API key for the address your agent will use.
 - **Self-hosting?** Run the stack with [fmsg-docker](https://github.com/markmnl/fmsg-docker) and issue
   a key with `fmsg-webapi api-key create`.
+
+Use the API URL and key for local installation below, or use your provider's API-key MCP endpoint
+with an `Authorization: Bearer fmsgk_...` header. The endpoint must use the fmsg Web API that accepts
+your key.
+
+### MCP Registry
+
+Find `io.github.markmnl/fmsg-mcp` in the [official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.markmnl%2Ffmsg-mcp).
+The listing offers local npm installation and configurable remote connections for OAuth or API keys.
+For a remote connection, supply the MCP endpoint from your fmsg hosting provider or your own deployment;
+the registry input takes its hostname and path without the `https://` prefix, such as `mcp.example.com/mcp`.
+OAuth sign-in is discovered from that endpoint; the API-key option additionally asks for your key.
+If your AI host cannot configure registry URL templates, add the full MCP URL directly instead.
 
 ## 2. Install
 
@@ -212,5 +234,12 @@ bash .github/scripts/run-fmsg-docker-e2e.sh                     # end to end on 
 
 See [AGENTS.md](./AGENTS.md) for layout and conventions, [ROADMAP.md](./ROADMAP.md) for remaining
 integration work, and [CHANGELOG.md](./CHANGELOG.md) for release notes.
+
+### Releasing
+
+Publish a stable GitHub release tagged `vX.Y.Z` to run the checks, publish the npm package, and
+then update the MCP Registry with the same version. Both use OIDC authentication; no dedicated
+registry secret is needed. Drafts and prereleases do not publish. Registry publishing runs as a
+separate job, so if it fails after npm succeeds, use **Re-run failed jobs** on the release workflow.
 
 [MIT licensed](./LICENSE)

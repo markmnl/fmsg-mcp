@@ -80,4 +80,7 @@ bash .github/scripts/run-fmsg-docker-e2e.sh         # real stacks via fmsg-docke
 ## Releasing
 
 Tag `vX.Y.Z`, publish a GitHub release; `.github/workflows/publish.yml` sets the version from the
-tag, runs the checks and publishes to npm with OIDC trusted publishing.
+tag, runs the checks and publishes to npm with OIDC trusted publishing. After npm succeeds, a
+separate job publishes the matching `server.json` to the MCP Registry using GitHub OIDC; no
+registry secret is required. Drafts and prereleases do not publish. If only the registry job
+fails, re-run failed jobs to retry it without republishing npm.
