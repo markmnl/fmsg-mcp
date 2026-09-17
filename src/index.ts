@@ -15,7 +15,7 @@ const USAGE = `${PACKAGE_NAME} ${VERSION} — MCP server for fmsg
 Usage:
   fmsg-mcp                      serve MCP over stdio (FMSG_API_URL + FMSG_API_KEY)
   fmsg-mcp --http [host:port]   serve Streamable HTTP at /mcp; clients send their own
-                                fmsg API key as "Authorization: Bearer fmsgk_..."
+                                bearer credential (API key by default, or configured OAuth)
   fmsg-mcp --version | --help
 
 Options (HTTP mode):
@@ -25,6 +25,9 @@ Options (HTTP mode):
 Environment:
   FMSG_API_URL               base URL of the fmsg Web API (required)
   FMSG_API_KEY               fmsgk_... key (stdio mode only)
+  FMSG_MCP_AUTH_MODE         api-key (default) or oauth (HTTP only)
+  FMSG_MCP_OAUTH_*           OAuth resource/issuer URLs, client ID/secret and exchange
+                            audience; see docs/oauth.md for required settings
   FMSG_ALLOW_INSECURE_HTTP   1 to allow a trusted private HTTP API outside loopback
   FMSG_DEFAULT_DOMAIN        lets short names resolve: bob -> @bob@<domain>
   FMSG_DIRECTORY             JSON file mapping short names to @user@domain

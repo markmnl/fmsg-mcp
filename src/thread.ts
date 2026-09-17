@@ -104,7 +104,7 @@ async function fromPidWalk(
     try {
       msg = await client.getMessage(id, signal);
     } catch (error) {
-      if (error instanceof FmsgHttpError && (error.status === 404 || error.status === 403)) {
+      if (error instanceof FmsgHttpError && (error.status === 404 || (error.status === 403 && !error.insufficientScope))) {
         complete = false;
         break;
       }

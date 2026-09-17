@@ -19,10 +19,15 @@ This is the next planned release; publication still happens through a `v0.2.0` G
 
 ### Fixes and improvements
 
+- Add opt-in, vendor-neutral HTTP OAuth with protected-resource discovery, signed JWT validation,
+  per-tool scopes and authenticated RFC 8693 exchange. Isolate caches per incoming token, cap
+  upstream credentials at five minutes and reconnect waits on expiry. Preserve API-key mode.
+  Deployed IdP and actual hosted-client acceptance remain rollout checks.
+
 - Accept caller-bound `TokenProvider` implementations in the client library alongside API keys.
   Share renewal across concurrent requests, pin the address, bound acquisition time, and propagate
   cancellation. Cap early renewal for short-lived tokens and reuse renewal after late 401 responses.
-  This is the OAuth foundation; hosted OAuth remains separate integration work.
+  This provides the credential lifecycle used by API keys and HTTP OAuth.
 - Retry protected reads when a WebSocket announces a message before it is readable. If retries run
   out, schedule a delayed inbox catch-up without requiring another push. Fix pre-cancelled waits
   and preserve request deadlines.

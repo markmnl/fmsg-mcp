@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { normalizeFmsgAddress } from "./address.js";
 import { normalizeApiUrl, normalizeOrigin } from "./client/url.js";
+import { loadOAuthConfig, type OAuthConfig } from "./oauth/config.js";
 
 export type Transport = "stdio" | "http";
 
@@ -29,6 +30,7 @@ export type Config = {
   /** Hard cap on a single wait_for_message call. */
   waitMaxSeconds: number;
   http: HttpConfig;
+  oauth?: OAuthConfig;
 };
 
 export const DEFAULT_HTTP_PORT = 8765;
@@ -87,6 +89,7 @@ export function loadConfig(
   options: LoadConfigOptions = {},
 ): Config {
   const requireCredentials = options.requireCredentials ?? true;
+  const oauth = loadOAuthConfig(env, transport);
   const apiUrl = env.FMSG_API_URL?.trim() ?? "";
   if (!apiUrl && (transport === "http" || requireCredentials)) {
     throw new Error("FMSG_API_URL is required (base URL of the fmsg Web API, e.g. https://api.example.com)");
@@ -101,7 +104,7 @@ export function loadConfig(
   }
   if (transport === "http" && apiKey) {
     throw new Error(
-      "FMSG_API_KEY must not be set in HTTP mode: each client supplies its own key as `Authorization: Bearer fmsgk_...`",
+      "FMSG_API_KEY must not be set in HTTP mode: each client supplies its own bearer credential",
     );
   }
 
@@ -115,6 +118,7 @@ export function loadConfig(
   return {
     transport,
     apiUrl: normalizedApiUrl,
+    ...(oauth ? { oauth } : {}),
     allowInsecureHttp,
     ...(transport === "stdio" && apiKey ? { apiKey } : {}),
     ...(defaultDomain ? { defaultDomain } : {}),

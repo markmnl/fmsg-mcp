@@ -10,7 +10,7 @@ export const registerIdentityTools: Register = (server, deps) => {
     {
       title: "Show fmsg identity",
       description:
-        "Report the fmsg address this server acts as (derived from the API key), the fmsg Web API URL, " +
+        "Report the fmsg address this server acts as (from the authenticated connection), the fmsg Web API URL, " +
         "when the current access token expires (it is renewed automatically; no action needed), and the " +
         "address-resolution defaults. Call this first if unsure who you are sending as.",
       outputSchema: z.object({

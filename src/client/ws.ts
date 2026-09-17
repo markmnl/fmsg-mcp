@@ -3,6 +3,9 @@ import type { FmsgClient } from "./client.js";
 import { normalizeMessageId, parseFmsgJson } from "./message-id.js";
 import type { FmsgMessage, WsEvent } from "./types.js";
 
+const expiries = new WeakMap<WebSocket, number>();
+export function webSocketTokenExpiresAt(socket: WebSocket): number | undefined { return expiries.get(socket); }
+
 /** Open the event WebSocket, authenticating with the bearer JWT in the header. */
 export async function openFmsgWebSocket(client: FmsgClient, signal?: AbortSignal): Promise<WebSocket> {
   const token = await client.getToken(false, signal);
@@ -11,7 +14,9 @@ export async function openFmsgWebSocket(client: FmsgClient, signal?: AbortSignal
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/+$/u, "")}/fmsg/ws`;
   url.search = "";
-  return new WebSocket(url, { headers: { authorization: `Bearer ${token.accessToken}` } });
+  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${token.accessToken}` } });
+  if (client.reconnectOnTokenExpiry) expiries.set(socket, token.expiresAtMs);
+  return socket;
 }
 
 export function parseWsEvent(raw: WebSocket.RawData): WsEvent | undefined {

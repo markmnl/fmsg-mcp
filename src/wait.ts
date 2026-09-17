@@ -4,7 +4,8 @@ import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import { compareMessageIds, maxMessageId, minMessageId } from "./client/message-id.js";
 import type { FmsgMessage } from "./client/types.js";
 import { safeErrorMessage } from "./client/redact.js";
-import { openFmsgWebSocket, parseWsEvent } from "./client/ws.js";
+import { openFmsgWebSocket, parseWsEvent, webSocketTokenExpiresAt } from "./client/ws.js";
+import { OAuthRequestError } from "./oauth/errors.js";
 
 export type WaitOptions = {
   /** Only messages with an id greater than this qualify. Default: the newest inbox id at call time. */
@@ -73,8 +74,8 @@ export async function waitForMessage(
   let finished = false;
   const retryStop = new AbortController();
   const retrySignal = signal ? AbortSignal.any([signal, retryStop.signal]) : retryStop.signal;
-  const authorizationFailure = (error: unknown) => error instanceof FmsgHttpError &&
-    ([401, 403].includes(error.status) || error.path === "/fmsg/token");
+  const authorizationFailure = (error: unknown) => error instanceof OAuthRequestError || (error instanceof FmsgHttpError &&
+    ([401, 403].includes(error.status) || error.path === "/fmsg/token"));
   const retryRead = async <T>(read: () => Promise<T>, attempts = 3): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
       retrySignal.throwIfAborted();
@@ -88,12 +89,13 @@ export async function waitForMessage(
   const rootCache = new Map<string, string>();
   const lookupRoot = async (id: string): Promise<string> => {
     try {
-      return (await client.getThreadMessages(id, signal)).root_id;
+      return (await client.getThreadMessages(id, retrySignal)).root_id;
     } catch (error) {
+      if (authorizationFailure(error)) throw error;
       // Fall back to a bounded pid walk; any failure here propagates as "unknown".
       let cur = id;
       for (let i = 0; i < 100; i++) {
-        const m = await client.getMessage(cur, signal);
+        const m = await client.getMessage(cur, retrySignal);
         if (!m.pid) return m.id;
         cur = m.pid;
       }
@@ -117,7 +119,8 @@ export async function waitForMessage(
   if (options.threadOf) {
     try {
       targetRoot = await rootOf(options.threadOf, 1);
-    } catch {
+    } catch (error) {
+      if (authorizationFailure(error)) throw error;
       throw new Error(`could not determine the thread of message ${options.threadOf}`);
     }
   }
@@ -136,6 +139,16 @@ export async function waitForMessage(
   let pollTimer: NodeJS.Timeout | undefined;
   let settleTimer: NodeJS.Timeout | undefined;
   let recoveryTimer: NodeJS.Timeout | undefined;
+  let openTimer: NodeJS.Timeout | undefined;
+  let expiryTimer: NodeJS.Timeout | undefined;
+  let reconnectTimer: NodeJS.Timeout | undefined;
+  let reconnectDelay = 1000;
+  const disposeSocket = (ws: WebSocket) => {
+    ws.removeAllListeners();
+    // terminate/close during CONNECTING can emit an asynchronous error.
+    ws.on("error", () => undefined);
+    ws.terminate();
+  };
 
   return new Promise<WaitResult>((resolve, reject) => {
     const cleanup = () => {
@@ -144,17 +157,13 @@ export async function waitForMessage(
       clearTimeout(deadlineTimer);
       clearTimeout(settleTimer);
       clearTimeout(recoveryTimer);
+      clearTimeout(openTimer);
+      clearTimeout(expiryTimer);
+      clearTimeout(reconnectTimer);
       clearInterval(pollTimer);
       clearInterval(tickTimer);
       signal?.removeEventListener("abort", onAbort);
-      if (socket) {
-        socket.removeAllListeners();
-        try {
-          socket.close();
-        } catch {
-          /* ignore */
-        }
-      }
+      if (socket) disposeSocket(socket);
     };
     const finish = () => {
       if (finished) return;
@@ -219,6 +228,7 @@ export async function waitForMessage(
       try {
         root = await rootOf(m.id);
       } catch (error) {
+        if (authorizationFailure(error)) return fail(error);
         if (!finished) unclassified.push({ id: m.id, from: m.from, error: safeErrorMessage(error) });
         return;
       } finally {
@@ -265,7 +275,7 @@ export async function waitForMessage(
       try {
         // A socket was authorized at its handshake. Re-read through a protected
         // route so an old connection cannot bypass upstream grant revocation.
-        const message = await retryRead(() => client.getMessage(id, signal));
+        const message = await retryRead(() => client.getMessage(id, retrySignal));
         inflight.delete(id);
         await consider(message);
       } catch (error) {
@@ -285,40 +295,61 @@ export async function waitForMessage(
     };
 
     const open = deps.openSocket ?? openFmsgWebSocket;
-    open(client, retrySignal)
-      .then((ws) => {
-        if (finished) {
-          ws.close();
-          return;
-        }
+    const reconnect = (immediate = false) => {
+      if (finished || reconnectTimer || !client.reconnectOnTokenExpiry) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = undefined;
+        connect();
+      }, immediate ? 0 : reconnectDelay);
+      if (!immediate) reconnectDelay = Math.min(reconnectDelay * 2, 10_000);
+    };
+    const connect = () => {
+      if (finished) return;
+      open(client, retrySignal).then(ws => {
+        if (finished) { disposeSocket(ws); return; }
         socket = ws;
-        const openTimer = setTimeout(() => {
-          if (ws.readyState !== ws.OPEN) {
-            ws.removeAllListeners();
-            ws.terminate();
-            socket = undefined;
-            startPolling("WebSocket did not open; polling instead");
+        const expiresAt = webSocketTokenExpiresAt(ws);
+        const disconnected = (why: string) => {
+          if (socket !== ws) return;
+          clearTimeout(openTimer);
+          clearTimeout(expiryTimer);
+          socket = undefined;
+          disposeSocket(ws);
+          if (finished) return;
+          if (client.reconnectOnTokenExpiry && expiresAt !== undefined && expiresAt <= Date.now() + 1000) {
+            reconnect(true);
+          } else {
+            startPolling(why);
+            reconnect();
           }
-        }, options.wsOpenTimeoutMs ?? 10_000);
+        };
+        openTimer = setTimeout(() => disconnected("WebSocket did not open; polling instead"), options.wsOpenTimeoutMs ?? 10_000);
         ws.on("open", () => {
           clearTimeout(openTimer);
+          reconnectDelay = 1000;
+          clearInterval(pollTimer);
+          pollTimer = undefined;
+          transport = "websocket";
+          note = null;
+          if (expiresAt !== undefined) {
+            expiryTimer = setTimeout(() => disconnected("WebSocket credential expired"), Math.max(0, expiresAt - Date.now()));
+          }
+          // Keep the original floor, seen set, batch and deadline across renewal.
           void catchUp();
         });
-        ws.on("message", (raw) => {
+        ws.on("message", raw => {
           const event = parseWsEvent(raw);
           if (event?.type === "new_msg" && event.data) void considerPushed(event.data.id);
         });
-        ws.on("error", () => {
-          clearTimeout(openTimer);
-          socket = undefined;
-          startPolling("WebSocket failed; polling instead");
-        });
-        ws.on("close", () => {
-          clearTimeout(openTimer);
-          socket = undefined;
-          if (!finished) startPolling("WebSocket closed; polling instead");
-        });
-      })
-      .catch(() => startPolling("WebSocket unavailable; polling instead"));
+        ws.on("error", () => disconnected("WebSocket failed; polling instead"));
+        ws.on("close", () => disconnected("WebSocket closed; polling instead"));
+      }).catch(error => {
+        if (finished) return;
+        if (authorizationFailure(error)) { fail(error); return; }
+        startPolling("WebSocket unavailable; polling instead");
+        reconnect();
+      });
+    };
+    connect();
   });
 }

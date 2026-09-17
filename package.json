@@ -47,6 +47,7 @@
     "ROADMAP.md",
     "docs/http-deployment.md",
     "docs/token-providers.md",
+    "docs/oauth.md",
     "LICENSE",
     "server.json"
   ],
@@ -66,6 +67,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
+    "jose": "^6.2.12",
     "ws": "^8.21.3",
     "zod": "^4.5.4"
   },
