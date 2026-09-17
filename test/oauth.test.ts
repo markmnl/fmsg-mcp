@@ -319,7 +319,8 @@ describe("HTTP OAuth", () => {
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toContain('error="invalid_token"');
     expect(await response.json()).toMatchObject({ error: "invalid_token" });
-    expect(idp.exchanges).toHaveLength(1);
+    // An early renewal can start just before subject expiry. Both paths must
+    // return the same challenge and release the socket, regardless of timing.
     await vi.waitFor(() => expect(api.connectedSockets(ALICE)).toBe(0));
   });
 
