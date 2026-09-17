@@ -28,6 +28,7 @@ Environment:
   FMSG_ALLOW_INSECURE_HTTP   1 to allow a trusted private HTTP API outside loopback
   FMSG_DEFAULT_DOMAIN        lets short names resolve: bob -> @bob@<domain>
   FMSG_DIRECTORY             JSON file mapping short names to @user@domain
+  FMSG_MCP_DOWNLOAD_DIR      enables save_attachment to this local folder (stdio)
   FMSG_MCP_WAIT_MAX_SECONDS  cap on one wait_for_message call (default 230)
   FMSG_MCP_ALLOWED_HOSTS     comma-separated Host header allowlist (HTTP, non-loopback)
   FMSG_MCP_ALLOWED_ORIGINS   exact browser origins, including scheme and port
@@ -83,17 +84,22 @@ async function main(): Promise<void> {
   }
   const transport = args.mode;
   let config;
+  let configurationError: string | undefined;
   try {
     config = loadConfig(process.env, transport, args.overrides, { requireCredentials: false });
   } catch (error) {
     console.error(`fmsg-mcp: ${safeErrorMessage(error)}`);
-    process.exit(2);
+    if (transport === "http") process.exit(2);
+    configurationError = `fmsg-mcp is not configured: ${safeErrorMessage(error)}. Correct the configuration and restart this MCP server.`;
+    config = loadConfig({}, "stdio", {}, { requireCredentials: false });
   }
 
   if (transport === "stdio") {
     const cfg = config;
     let provider: CallerProvider;
-    if (cfg.apiUrl && cfg.apiKey) {
+    if (configurationError) {
+      provider = new UnconfiguredCallerProvider(configurationError);
+    } else if (cfg.apiUrl && cfg.apiKey) {
       provider = new StaticCallerProvider(new FmsgClient(cfg.apiUrl, cfg.apiKey, { allowInsecureHttp: cfg.allowInsecureHttp }));
       console.error(safeErrorMessage(`fmsg-mcp ${VERSION} serving stdio for ${cfg.apiUrl}`));
     } else {

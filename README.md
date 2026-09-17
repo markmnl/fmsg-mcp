@@ -7,8 +7,8 @@
 An [MCP](https://modelcontextprotocol.io) server that gives any AI agent its own
 [fmsg](https://github.com/markmnl/fmsg) address: send messages, follow threads, react, exchange
 attachments and wait for replies, through a deployed
-[fmsg Web API](https://github.com/markmnl/fmsg-webapi). Works with Claude Code, Claude Desktop,
-Cursor, VS Code, claude.ai remote connectors and any other MCP host.
+[fmsg Web API](https://github.com/markmnl/fmsg-webapi). Connect through stdio in hosts such as
+Claude Code, Claude Desktop, Cursor and VS Code, or through HTTP in clients that support bearer headers.
 
 - **stdio** for local hosts: one address per server process, configured by two environment variables.
 - **Streamable HTTP** for shared or remote deployments: one endpoint serving many users, each
@@ -77,9 +77,18 @@ The MCP endpoint is `/mcp`; `/healthz` reports liveness. Use a client that suppo
 configured `Authorization: Bearer fmsgk_...` header. Each caller supplies its own key; a shared
 header means a shared fmsg identity. Hosted connectors that require OAuth are not supported yet.
 
+For [Claude Code over HTTP](https://code.claude.com/docs/en/mcp):
+
+```sh
+claude mcp add --transport http fmsg --scope user https://mcp.example.com/mcp \
+  --header "Authorization: Bearer fmsgk_..."
+```
+
 Deploy behind a TLS-terminating reverse proxy and set `FMSG_MCP_ALLOWED_HOSTS` to the public hostname
 when binding to a non-loopback address; startup fails without it. Browser clients on another origin
 also need `FMSG_MCP_ALLOWED_ORIGINS` containing exact origins, such as `https://app.example.com`.
+For loopback binds, loopback browser origins on any port work by default, including MCP Inspector
+at `http://localhost:6274`. Setting an explicit origin list replaces that loopback default.
 Allowed preflights need no credentials; actual MCP requests always require authentication.
 `wait_for_message` holds a request open for up to
 `FMSG_MCP_WAIT_MAX_SECONDS` (230), so give the proxy an idle timeout of at least 240 s.
@@ -100,7 +109,8 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `add_recipients` | Add recipients to a sent message |
 | `react` | Set or clear your emoji reaction |
 | `mark_read` | Mark received messages read |
-| `download_attachment` | Fetch an attachment inline (base64, images as image blocks); use the host's file tools to save it |
+| `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources |
+| `save_attachment` | Stream an attachment to the configured local folder; stdio only, enabled by `FMSG_MCP_DOWNLOAD_DIR` |
 | `delivery_status` | Per-recipient delivery times and host response codes |
 | `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context |
 
@@ -119,32 +129,33 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |
 | `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>` |
 | `FMSG_DIRECTORY` | — | JSON file mapping short names to full addresses |
+| `FMSG_MCP_DOWNLOAD_DIR` | — | Enable `save_attachment` in stdio; folder for new files named from message ID and filename |
 | `FMSG_MCP_WAIT_MAX_SECONDS` | `230` | Cap on one `wait_for_message` call |
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
 | `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
-| `FMSG_MCP_ALLOWED_ORIGINS` | same origin only | Comma-separated browser origins including scheme and port; hostname-only values are rejected |
+| `FMSG_MCP_ALLOWED_ORIGINS` | same origin; loopback origins on loopback binds | Comma-separated browser origins including scheme and port; an explicit list replaces the loopback default; hostname-only values are rejected |
 | `FMSG_MCP_KEY_CACHE_MAX` / `FMSG_MCP_KEY_CACHE_TTL_SECONDS` | `500` / `1800` | HTTP mode per-key client cache |
 
 The API key is exchanged for a short-lived access token that the server renews automatically.
 API URLs must not contain credentials, query strings or fragments. Authenticated requests do not
 follow redirects; configure the final API URL directly.
 
-For ordinary stdio use, the HTTPS API URL and API key are the only required settings. Token renewal
-and cache management run automatically. The server adds no separate login, messaging permissions
-or confirmation step. User-authorized conversations and automation can send multiple messages;
-the AI host's own tool approval settings still apply. Host/Origin settings are for HTTP deployment.
+To save attachments directly to disk, add `FMSG_MCP_DOWNLOAD_DIR` to your stdio server's environment,
+for example `/home/you/Downloads/fmsg`. The optional `save_attachment` tool streams files into that
+folder without sending their bytes through model context. It accepts only a message ID and attachment
+filename, creates a new file such as `123-report.pdf`, and refuses to overwrite existing files.
+Unusual filenames are converted to portable names; use the returned `saved_to` path.
+HTTP clients use inline downloads or their host's file capabilities.
 
-Attachment downloads return content. Saving that content depends on the AI host's file capabilities;
-there is no server-side save option. A seamless attachment-saving workflow has not yet been verified
-across hosts.
-
-Over stdio the server also starts with no credentials at all, so hosts and directories can list its tools; every tool call then returns a message naming the missing variables.
+Over stdio, missing or invalid configuration still allows hosts to discover the tools. Tool calls
+explain the configuration error and how to fix it; restart the MCP server after correcting settings.
 
 ## Safety
 
 - Messaging access, quotas and recipient acceptance are enforced by fmsg-webapi and the host
   services. MCP forwards each operation as the caller's identity and surfaces upstream failures.
-- `download_attachment` never writes local files. Host file tools apply the host's own permissions.
+- `download_attachment` never writes local files. Optional `save_attachment` writes only generated
+  filenames in the operator-configured folder, using exclusive creation with no overwrite.
 - Sent messages cannot be edited or recalled; send tools say so in their descriptions and are
   annotated `destructiveHint` to describe their effects. Approval behavior belongs to the AI host;
   fmsg-mcp has no additional confirmation gate.
@@ -165,9 +176,14 @@ import { FmsgClient } from "@markmnl/fmsg-mcp/client";
 const client = new FmsgClient("https://api.example.com", process.env.FMSG_API_KEY!);
 console.log(await client.address());
 const inbox = await client.listInbox(10);
-await client.send({ to: ["@bob@example.com"], topic: "Hi", body: "Hello from code" });
+const sent = await client.send({ to: ["@bob@example.com"], topic: "Hi", body: "Hello from code" });
+console.log(sent.id, sent.redactions);
 client.close();
 ```
+
+`send()` replaces selected credential patterns in the body and topic before creating the draft.
+Its result includes the replacement count (`redactions`) and transmitted `topic`. Attachments are
+unchanged. Use `streamAttachment()` to consume large files incrementally; consume or cancel its stream.
 
 ## Development
 
@@ -178,6 +194,7 @@ npx @modelcontextprotocol/inspector node dist/index.js          # stdio, with FM
 bash .github/scripts/run-fmsg-docker-e2e.sh                     # end to end on two real fmsg stacks
 ```
 
-See [AGENTS.md](./AGENTS.md) for layout and conventions.
+See [AGENTS.md](./AGENTS.md) for layout and conventions, [ROADMAP.md](./ROADMAP.md) for remaining
+integration work, and [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
 [MIT licensed](./LICENSE)

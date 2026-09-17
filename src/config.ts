@@ -9,7 +9,7 @@ export type HttpConfig = {
   port: number;
   /** Hostnames accepted in the Host header. Empty means: derive from the bind address (loopback only). */
   allowedHosts: string[];
-  /** Exact browser origins, including scheme and port. Empty permits same-origin requests only. */
+  /** Exact browser origins. Empty permits same-origin and, on loopback binds, loopback origins on any port. */
   allowedOrigins: string[];
   keyCacheMax: number;
   keyCacheTtlMs: number;
@@ -24,6 +24,8 @@ export type Config = {
   apiKey?: string;
   defaultDomain?: string;
   directory?: Record<string, string>;
+  /** Trusted local destination; enables save_attachment over stdio only. */
+  downloadDir?: string;
   /** Hard cap on a single wait_for_message call. */
   waitMaxSeconds: number;
   http: HttpConfig;
@@ -93,6 +95,7 @@ export function loadConfig(
   const normalizedApiUrl = apiUrl ? normalizeApiUrl(apiUrl, allowInsecureHttp) : "";
 
   const apiKey = env.FMSG_API_KEY?.trim();
+  if (transport === "stdio" && apiKey && !apiKey.startsWith("fmsgk_")) throw new Error("FMSG_API_KEY must start with fmsgk_");
   if (transport === "stdio" && !apiKey && requireCredentials) {
     throw new Error("FMSG_API_KEY is required in stdio mode (an fmsgk_... key for the address this server sends as)");
   }
@@ -116,6 +119,7 @@ export function loadConfig(
     ...(transport === "stdio" && apiKey ? { apiKey } : {}),
     ...(defaultDomain ? { defaultDomain } : {}),
     ...(directoryPath ? { directory: loadDirectory(directoryPath) } : {}),
+    ...(transport === "stdio" && env.FMSG_MCP_DOWNLOAD_DIR?.trim() ? { downloadDir: env.FMSG_MCP_DOWNLOAD_DIR.trim() } : {}),
     waitMaxSeconds: intEnv(env, "FMSG_MCP_WAIT_MAX_SECONDS", DEFAULT_WAIT_MAX_SECONDS),
     http: {
       host,

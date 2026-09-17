@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import {
+  type AuthInfo,
   createMcpHandler,
   hostHeaderValidationResponse,
   localhostAllowedHostnames,
@@ -89,12 +90,13 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const provider = new ApiKeyCallerProvider(config, safeLog);
   const handler = createMcpHandler(({ authInfo }) =>
     createFmsgMcpServer(provider, config, authInfo?.clientId ? { address: authInfo.clientId } : {}),
-    { onerror: (error) => safeLog(`MCP transport failed: ${safeErrorMessage(error)}`) },
+    { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
   );
   const gate = requireBearerAuth({ verifier: provider, requiredScopes: [FMSG_SCOPE] });
   const active = new Set<AbortController>();
 
   const server = createServer((req, res) => {
+    let authenticated: AuthInfo | undefined;
     const controller = new AbortController();
     active.add(controller);
     const abort = () => controller.abort();
@@ -121,8 +123,11 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (origin !== null) {
         let valid = false;
         try {
-          valid = new URL(origin).origin === origin &&
-            (allowedOrigins.includes(origin) || origin === new URL(request.url).origin);
+          const parsed = new URL(origin);
+          const localDevelopment = isLoopbackHost(config.http.host) && !allowedOrigins.length &&
+            /^https?:$/u.test(parsed.protocol) && isLoopbackHost(parsed.hostname);
+          valid = parsed.origin === origin &&
+            (localDevelopment || allowedOrigins.includes(origin) || origin === new URL(request.url).origin);
         } catch { /* malformed origins are rejected */ }
         if (!valid) return sendWebResponse(res, new Response("origin not allowed", { status: 403 }));
         res.setHeader("access-control-allow-origin", origin);
@@ -142,12 +147,14 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       }
       const auth = await gate(request);
       if (auth instanceof Response) return sendWebResponse(res, auth);
+      authenticated = auth;
       return sendWebResponse(res, await handler.fetch(request, { authInfo: auth }));
     })().catch((error) => {
-      safeLog(`request failed: ${safeErrorMessage(error)}`);
+      safeLog(`request failed: ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
       res.end("internal error");
     }).finally(() => {
+      if (authenticated) provider.release(authenticated);
       active.delete(controller);
       req.off("aborted", abort);
       res.off("close", abort);

@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import { setTimeout as delay } from "node:timers/promises";
 import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import { compareMessageIds, maxMessageId, minMessageId } from "./client/message-id.js";
 import type { FmsgMessage } from "./client/types.js";
@@ -70,6 +71,20 @@ export async function waitForMessage(
   let skippedMax = floor;
 
   let finished = false;
+  const retryStop = new AbortController();
+  const retrySignal = signal ? AbortSignal.any([signal, retryStop.signal]) : retryStop.signal;
+  const authorizationFailure = (error: unknown) => error instanceof FmsgHttpError &&
+    ([401, 403].includes(error.status) || error.path === "/fmsg/token");
+  const retryRead = async <T>(read: () => Promise<T>, attempts = 3): Promise<T> => {
+    for (let attempt = 0; ; attempt++) {
+      retrySignal.throwIfAborted();
+      try { return await read(); }
+      catch (error) {
+        if (authorizationFailure(error) || attempt + 1 >= attempts) throw error;
+        await delay(400 * (attempt + 1), undefined, { signal: retrySignal });
+      }
+    }
+  };
   const rootCache = new Map<string, string>();
   const lookupRoot = async (id: string): Promise<string> => {
     try {
@@ -94,19 +109,9 @@ export async function waitForMessage(
   const rootOf = async (id: string, attempts = 3): Promise<string> => {
     const cached = rootCache.get(id);
     if (cached !== undefined) return cached;
-    let lastError: unknown;
-    for (let i = 0; i < attempts; i++) {
-      if (signal?.aborted || finished) break;
-      try {
-        const root = await lookupRoot(id);
-        rootCache.set(id, root);
-        return root;
-      } catch (error) {
-        lastError = error;
-        if (i + 1 < attempts) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
-      }
-    }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    const root = await retryRead(() => lookupRoot(id), attempts);
+    rootCache.set(id, root);
+    return root;
   };
   let targetRoot: string | undefined;
   if (options.threadOf) {
@@ -134,6 +139,7 @@ export async function waitForMessage(
   return new Promise<WaitResult>((resolve, reject) => {
     const cleanup = () => {
       finished = true;
+      retryStop.abort();
       clearTimeout(deadlineTimer);
       clearTimeout(settleTimer);
       clearInterval(pollTimer);
@@ -196,6 +202,7 @@ export async function waitForMessage(
     const consider = async (m: FmsgMessage) => {
       if (finished || seen.has(m.id)) return;
       seen.add(m.id);
+      for (let i = unclassified.length - 1; i >= 0; i--) if (unclassified[i]?.id === m.id) unclassified.splice(i, 1);
       if (compareMessageIds(m.id, floor) <= 0) return;
       const skip = (reason: SkipReason) => {
         skipped.push({ id: m.id, reason });
@@ -255,16 +262,15 @@ export async function waitForMessage(
       try {
         // A socket was authorized at its handshake. Re-read through a protected
         // route so an old connection cannot bypass upstream grant revocation.
-        const message = await client.getMessage(id, signal);
+        const message = await retryRead(() => client.getMessage(id, signal));
         inflight.delete(id);
         await consider(message);
       } catch (error) {
         if (finished) return;
-        if (error instanceof FmsgHttpError && ([401, 403].includes(error.status) || error.path === "/fmsg/token")) {
+        if (authorizationFailure(error)) {
           fail(error);
         } else {
-          seen.add(id);
-          unclassified.push({ id, from: "", error: safeErrorMessage(error) });
+          if (!unclassified.some(item => item.id === id)) unclassified.push({ id, from: "", error: safeErrorMessage(error) });
         }
       } finally { inflight.delete(id); }
     };

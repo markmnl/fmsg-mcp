@@ -35,7 +35,7 @@ export class StaticCallerProvider implements CallerProvider {
   }
 }
 
-/** stdio without credentials: the server starts (so hosts can list tools) but every tool explains what is missing. */
+/** Invalid/missing stdio configuration: allow discovery, then explain the configuration fix on tool calls. */
 export class UnconfiguredCallerProvider implements CallerProvider {
   constructor(private readonly reason: string) {}
   forRequest(): Promise<Caller> {

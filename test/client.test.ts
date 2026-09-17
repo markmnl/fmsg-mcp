@@ -58,6 +58,33 @@ describe("FmsgClient", () => {
     await expect(bad.address()).rejects.toBeInstanceOf(FmsgHttpError);
   });
 
+  it("bounds proxy error previews while streaming and preserves host policy JSON", async () => {
+    let chunks = 0;
+    let cancelled = false;
+    const proxyClient = new FmsgClient(fake.baseUrl, "fmsgk_alice_secret", {
+      fetch: (url, init) => String(url).endsWith("/token") ? fetch(url, init) : Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { chunks++; controller.enqueue(Buffer.from("<html>proxy unavailable</html>".repeat(100))); },
+        cancel() { cancelled = true; },
+      }), { status: 502, headers: { "content-type": "text/html" } })),
+    });
+    try {
+      const error = await proxyClient.listInbox().catch(error => error as FmsgHttpError);
+      expect(error).toBeInstanceOf(FmsgHttpError);
+      expect((error as FmsgHttpError).message.length).toBeLessThan(2200);
+      expect((error as FmsgHttpError).message).toContain("truncated");
+      expect(chunks).toBeLessThan(5);
+      expect(cancelled).toBe(true);
+      const detail = "host acceptance explanation ".repeat(200);
+      fake.failNext = { match: /^GET \/fmsg$/u, status: 413, error: detail, code: "host_limit" };
+      await expect(client.listInbox()).rejects.toMatchObject({ status: 413, message: detail, code: "host_limit" });
+      fake.failNext = { match: /^GET \/fmsg$/u, status: 503, error: detail };
+      const jsonError = await client.listInbox().catch(error => error as FmsgHttpError);
+      expect(jsonError).toBeInstanceOf(FmsgHttpError);
+      expect((jsonError as FmsgHttpError).message.length).toBeLessThan(2200);
+      expect((jsonError as FmsgHttpError).message).toContain("truncated");
+    } finally { proxyClient.close(); }
+  });
+
   it("lists the inbox with exact big ids and fetches full text beyond short_text", async () => {
     const big = "9223372036854775806";
     const long = "x".repeat(2000);

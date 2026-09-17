@@ -2,6 +2,7 @@ import { normalizeFmsgAddress } from "../address.js";
 import { normalizeMessageId, parseFmsgJson, stringifyWithIds } from "./message-id.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeApiUrl } from "./url.js";
+import { readBytes } from "./stream.js";
 import type {
   AccessToken,
   Attachment,
@@ -36,6 +37,8 @@ export class FmsgHttpError extends Error {
   ) {
     super(redactSecrets(message).text);
     if (this.code) this.code = redactSecrets(this.code).text;
+    this.method = redactSecrets(method).text;
+    this.path = redactSecrets(path).text;
     this.name = "FmsgHttpError";
   }
 }
@@ -51,14 +54,22 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
 }
 
 async function readError(response: Response): Promise<{ message: string; code?: string }> {
-  const raw = await response.text().catch(() => "");
+  // Preserve canonical 400/413 JSON policy details. Other errors, including
+  // proxy pages, get a bounded preview independent of message acceptance limits.
+  const isJson = (response.headers.get("content-type") ?? "").toLowerCase().includes("json");
+  let raw: string;
+  if (!isJson || ![400, 413].includes(response.status)) {
+    const { data, truncated } = await readBytes(response.body, 2048, true);
+    raw = Buffer.from(data).toString("utf8");
+    if (!isJson || truncated) return { message: (raw || `HTTP ${response.status}`) + (truncated ? "\n[upstream response truncated at 2048 bytes]" : "") };
+  } else raw = await response.text();
   if (!raw) return { message: `HTTP ${response.status}` };
   try {
     const parsed = JSON.parse(raw) as { error?: unknown; code?: unknown };
     const message = typeof parsed.error === "string" ? parsed.error : `HTTP ${response.status}`;
     return typeof parsed.code === "string" ? { message, code: parsed.code } : { message };
   } catch {
-    return { message: raw };
+    return { message: Buffer.byteLength(raw) > 2048 ? Buffer.from(raw).subarray(0, 2048).toString("utf8") + "\n[upstream response truncated at 2048 bytes]" : raw };
   }
 }
 
@@ -128,7 +139,7 @@ export class FmsgClient {
     });
     if (!response.ok) {
       const { message, code } = await readError(response);
-      throw new FmsgHttpError(`token exchange failed: ${redactSecrets(message).text}`, response.status, "POST", "/fmsg/token", code);
+      throw new FmsgHttpError(`token exchange failed: ${message}`, response.status, "POST", "/fmsg/token", code);
     }
     const body = (await response.json()) as { access_token?: unknown; expires_in?: unknown; expires_at?: unknown };
     if (typeof body.access_token !== "string") throw new Error("token response has no access_token");
@@ -159,7 +170,7 @@ export class FmsgClient {
     if (!response.ok) {
       const { message, code } = await readError(response);
       const method = init.method ?? "GET";
-      throw new FmsgHttpError(redactSecrets(message).text, response.status, method, path, code);
+      throw new FmsgHttpError(message, response.status, method, path, code);
     }
     return response;
   }
@@ -287,14 +298,23 @@ export class FmsgClient {
     id: string,
     filename: string,
     signal?: AbortSignal,
+    maxBytes?: number,
   ): Promise<{ data: Uint8Array; contentType?: string }> {
+    const { stream, contentType } = await this.streamAttachment(id, filename, signal);
+    const { data } = await readBytes(stream, maxBytes);
+    return { data, ...(contentType ? { contentType } : {}) };
+  }
+
+  /** Caller owns the stream and must consume or cancel it. */
+  async streamAttachment(id: string, filename: string, signal?: AbortSignal): Promise<{ stream: ReadableStream<Uint8Array>; contentType?: string }> {
     const mid = normalizeMessageId(id);
     const response = await this.request(
       `/fmsg/${encodeURIComponent(mid)}/attach/${encodeURIComponent(filename)}`,
       { signal },
     );
     const contentType = response.headers.get("content-type") ?? undefined;
-    return { data: new Uint8Array(await response.arrayBuffer()), ...(contentType ? { contentType } : {}) };
+    if (!response.body) throw new Error("attachment response has no body");
+    return { stream: response.body, ...(contentType ? { contentType } : {}) };
   }
 
   async deleteMessage(id: string, signal?: AbortSignal): Promise<void> {
@@ -310,8 +330,8 @@ export class FmsgClient {
       from,
       to: input.to,
       type: input.type ?? "text/markdown; charset=utf-8",
-      data: redactSecrets(input.body).text,
-      topic: input.pid ? "" : redactSecrets(input.topic ?? "").text,
+      data: input.body,
+      topic: input.pid ? "" : (input.topic ?? ""),
       ...(input.important ? { important: true } : {}),
       ...(input.noReply ? { no_reply: true } : {}),
     };
@@ -340,12 +360,18 @@ export class FmsgClient {
     return { filename: result.filename ?? attachment.filename, size: result.size ?? attachment.data.byteLength };
   }
 
-  /** Draft → attach → send. The draft is deleted if any step after creation fails. */
+  /**
+   * Draft → attach → send. Selected secret patterns in body/topic are replaced;
+   * the result reports their count and the sent topic. Attachments are unchanged.
+   * The draft is deleted if any step after creation fails.
+   */
   async send(input: SendInput): Promise<SendResult> {
     if (input.to.length === 0) throw new Error("at least one recipient is required");
     if (input.pid && input.topic) throw new Error("a reply (pid) cannot carry a topic");
     const from = await this.address();
-    const draftId = await this.createDraft(input, from);
+    const body = redactSecrets(input.body);
+    const topic = redactSecrets(input.pid ? "" : (input.topic ?? ""));
+    const draftId = await this.createDraft({ ...input, body: body.text, topic: topic.text }, from);
     try {
       const attachments: Attachment[] = [];
       for (const attachment of input.attachments ?? []) {
@@ -360,6 +386,8 @@ export class FmsgClient {
         id: result.id === undefined || result.id === null ? draftId : normalizeMessageId(result.id),
         time: result.time ?? null,
         attachments,
+        redactions: body.count + topic.count,
+        topic: topic.text,
       };
     } catch (error) {
       await this.deleteMessage(draftId).catch(() => undefined);

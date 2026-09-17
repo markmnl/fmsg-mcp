@@ -80,7 +80,8 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
 
     const dl = await call(bob.client, "download_attachment", { id: bobCopy, filename: "note.txt" });
     expect(dl.isError).toBeFalsy();
-    expect(dl.content.some((c) => c.type === "resource")).toBe(true);
+    expect(text(dl)).toContain(`attachment ${token}`);
+    expect(dl.content.every((c) => c.type === "text")).toBe(true);
 
     const aliceWaiting = call(alice.client, "wait_for_message", { timeout_seconds: 120, settle_seconds: 1 });
     await new Promise((r) => setTimeout(r, 1500));

@@ -44,11 +44,12 @@ test/fmsg-docker.e2e.test.ts   real two-host run, gated by FMSG_E2E=1
 - Every tool returns concise Markdown in `content[0].text` **and** `structuredContent` matching its
   `outputSchema`. Failures are `isError: true` results built by `src/errors.ts`, never thrown past
   the handler.
-- Send-type tools carry `destructiveHint: true`; read tools `readOnlyHint: true`.
+- Irreversible send-type tools carry `destructiveHint: true`; reversible reactions use
+  `destructiveHint: false` and `idempotentHint: true`. Read tools use `readOnlyHint: true`.
 - Outbound bodies/topics and every error string pass through `redactSecrets`. Never log an API key;
   log the address and a key-hash prefix.
-- Message content handed to the model is prefixed with the data-not-instructions preamble
-  (`DATA_NOT_INSTRUCTIONS` in `src/render.ts`).
+- Untrusted message content handed to the model is framed with `messageData` in `src/render.ts`;
+  server-authored guidance stays outside that frame.
 - stdout is the stdio protocol channel: log with `console.error` only.
 - Public OSS repo: never name a specific identity provider; use `example.com` in examples.
 

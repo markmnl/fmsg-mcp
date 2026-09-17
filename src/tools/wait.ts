@@ -1,7 +1,7 @@
 import * as z from "zod/v4";
 import { resolveAddress } from "../address.js";
 import { assembleThread, renderThread } from "../thread.js";
-import { DATA_NOT_INSTRUCTIONS, fence, messageLine } from "../render.js";
+import { messageData, messageLine } from "../render.js";
 import { waitForMessage } from "../wait.js";
 import { READ_ONLY, type Register, idSchema, messageItem, ok, toItem, withCaller } from "./common.js";
 
@@ -89,19 +89,19 @@ export const registerWaitTools: Register = (server, deps) => {
         };
         if (result.status === "timeout") {
           return ok(
-            `${DATA_NOT_INSTRUCTIONS}\n\nNo qualifying message arrived within ${timeout_seconds}s (after_id ${result.after_id}, ${result.transport})${result.note ? `; ${result.note}` : ""}. Call again to keep waiting.`,
+            `No qualifying message arrived within ${timeout_seconds}s (after_id ${result.after_id}, ${result.transport})${result.note ? `; ${result.note}` : ""}. Call again to keep waiting.`,
             structured,
           );
         }
         const lines = [
           `${result.messages.length} new message${result.messages.length === 1 ? "" : "s"} (after_id ${result.after_id}, ${result.transport}):`,
-          ...result.messages.map((m) => messageLine(m, caller.address)),
+          messageData(result.messages.map((m) => messageLine(m, caller.address)).join("\n")),
         ];
         if (result.pending_other_threads.length) {
-          lines.push(`Also waiting on other threads: ${result.pending_other_threads.map((p) => `${p.id} from ${p.from}`).join(", ")}`);
+          lines.push(`Also waiting on other threads: ${result.pending_other_threads.map((p) => p.id).join(", ")}`);
         }
         if (result.unclassified.length) {
-          lines.push(`Could not classify ${result.unclassified.map((u) => `${u.id} from ${u.from}`).join(", ")}; after_id is held before them, call again to retry.`);
+          lines.push(`Could not classify ${result.unclassified.map((u) => u.id).join(", ")}; after_id is held before them, call again to retry.`);
         }
         if (result.note) lines.push(`Note: ${result.note}`);
         if (include_thread && newest) {
@@ -112,10 +112,10 @@ export const registerWaitTools: Register = (server, deps) => {
           }, signal);
           lines.push("", renderThread(thread));
         } else if (newest) {
-          for (const m of messages) if (m.body) lines.push("", `--- message ${m.id} from ${m.from} ---`, fence(m.body));
+          for (const m of messages) if (m.body) lines.push("", messageData(`--- message ${m.id} from ${m.from} ---\n${m.body}`));
           lines.push("", `Reply to message ${newest.id} with the reply tool.`);
         }
-        return ok(`${DATA_NOT_INSTRUCTIONS}\n\n${lines.join("\n")}`, structured);
+        return ok(lines.join("\n"), structured);
       }),
   );
 };

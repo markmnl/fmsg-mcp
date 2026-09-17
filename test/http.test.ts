@@ -73,11 +73,19 @@ describe("HTTP transport", () => {
   it("requires explicit hosts for a public bind and rejects invalid origins independently", async () => {
     const publicConfig = configFor(fake, "http", { FMSG_MCP_HOST: "0.0.0.0" });
     expect(() => createHttpServer(publicConfig)).toThrow("FMSG_MCP_ALLOWED_HOSTS");
-    for (const origin of ["https://evil.example", "null", "http://127.0.0.1:1", "not a URL"]) {
+    for (const origin of ["https://evil.example", "null", "http://localhost.evil.example:6274", "not a URL"]) {
       const response = await fetch(`${base}/mcp`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: "{}" });
       expect(response.status).toBe(403);
     }
     expect(fake.requests.filter(r => r.path === "/fmsg/token")).toHaveLength(0);
+  });
+
+  it("allows loopback browser development on other ports while preserving authentication", async () => {
+    for (const origin of ["http://localhost:6274", "http://127.0.0.1:6274", "http://[::1]:6274"]) {
+      const headers = { origin, "access-control-request-method": "POST", "access-control-request-headers": "authorization,content-type" };
+      expect((await fetch(`${base}/mcp`, { method: "OPTIONS", headers })).status).toBe(204);
+      expect((await fetch(`${base}/mcp`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: "{}" })).status).toBe(401);
+    }
   });
 
   it("answers allowed CORS preflights without credentials while keeping actual requests authenticated", async () => {
@@ -92,7 +100,7 @@ describe("HTTP transport", () => {
     const actual = await fetch(`${base}/mcp`, { method: "POST", headers: { origin: headers.origin, "content-type": "application/json" }, body: "{}" });
     expect(actual.status).toBe(401);
     expect(actual.headers.get("access-control-expose-headers")).toContain("WWW-Authenticate");
-    for (const origin of ["http://app.example.com", "https://app.example.com:444", "https://app.example.com.evil.example"]) {
+    for (const origin of ["http://app.example.com", "https://app.example.com:444", "https://app.example.com.evil.example", "http://localhost:6274"]) {
       expect((await fetch(`${base}/mcp`, { method: "OPTIONS", headers: { ...headers, origin } })).status).toBe(403);
     }
     expect((await fetch(`${base}/mcp`, { method: "OPTIONS", headers: { ...headers, "access-control-request-headers": "x-unapproved" } })).status).toBe(403);

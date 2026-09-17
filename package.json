@@ -43,6 +43,8 @@
     "dist/**/*.d.ts",
     "README.md",
     "SECURITY.md",
+    "CHANGELOG.md",
+    "ROADMAP.md",
     "docs/http-deployment.md",
     "LICENSE",
     "server.json"

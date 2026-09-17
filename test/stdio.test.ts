@@ -53,4 +53,22 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
     fake.seed({ from: BOB, to: [ALICE], topic: "stdio", data: "over stdio" });
     expect(structured<{ count: number }>(await call(client, "list_messages")).count).toBe(1);
   });
+
+  it.each([
+    [{ FMSG_API_URL: "http://host.docker.internal:8000", FMSG_API_KEY: "fmsgk_example_key" }, "FMSG_ALLOW_INSECURE_HTTP=1"],
+    [{ FMSG_API_URL: "https://api.example.com", FMSG_API_KEY: "invalid" }, "FMSG_API_KEY must start"],
+    [{ FMSG_API_URL: "https://api.example.com", FMSG_API_KEY: "fmsgk_example_key", FMSG_MCP_WAIT_MAX_SECONDS: "bad" }, "FMSG_MCP_WAIT_MAX_SECONDS"],
+  ])("keeps configuration errors visible through MCP discovery", async (settings, hint) => {
+    const unconfigured = new Client({ name: "invalid-config", version: "0.0.0" });
+    const env = { ...process.env, ...settings, FMSG_ALLOW_INSECURE_HTTP: "0" } as Record<string, string>;
+    await unconfigured.connect(new StdioClientTransport({ command: process.execPath, args: [entry], env, stderr: "pipe" }));
+    try {
+      expect((await unconfigured.listTools()).tools.length).toBe(14);
+      const result = await call(unconfigured, "whoami");
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain(hint);
+      expect(text(result)).toContain("restart");
+      expect(text(result)).not.toContain("not instructions");
+    } finally { await unconfigured.close(); }
+  });
 });
