@@ -235,4 +235,11 @@ bash .github/scripts/run-fmsg-docker-e2e.sh                     # end to end on 
 See [AGENTS.md](./AGENTS.md) for layout and conventions, [ROADMAP.md](./ROADMAP.md) for remaining
 integration work, and [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
+### Releasing
+
+Publish a stable GitHub release tagged `vX.Y.Z` to run the checks, publish the npm package, and
+then update the MCP Registry with the same version. Both use OIDC authentication; no dedicated
+registry secret is needed. Drafts and prereleases do not publish. Registry publishing runs as a
+separate job, so if it fails after npm succeeds, use **Re-run failed jobs** on the release workflow.
+
 [MIT licensed](./LICENSE)
