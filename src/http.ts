@@ -281,7 +281,12 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     for (const controller of active) controller.abort();
     provider.close();
     await handler.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      // Aborted fetches may open replacement sockets without a request, so
+      // they are absent from `active` and must also be closed on shutdown.
+      server.closeAllConnections();
+    });
   };
   return { server, close, provider };
 }

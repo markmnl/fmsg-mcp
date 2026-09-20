@@ -1,5 +1,6 @@
 import { request } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createConnection, type AddressInfo } from "node:net";
+import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { ApiKeyCallerProvider } from "../src/auth.js";
@@ -37,6 +38,17 @@ describe("HTTP transport", () => {
     expect(ok.status).toBe(200);
     expect(await ok.json()).toMatchObject({ ok: true, name: "fmsg-mcp" });
     expect((await fetch(`${base}/other`)).status).toBe(404);
+  });
+
+  it("shuts down connections opened without an HTTP request", async () => {
+    // Fetch pools may open a replacement connection after a cancelled download.
+    const socket = createConnection({ host: "127.0.0.1", port: (http.server.address() as AddressInfo).port });
+    await once(socket, "connect");
+    const closing = http.close();
+    try {
+      await vi.waitFor(() => expect(socket.destroyed).toBe(true));
+      await closing;
+    } finally { socket.destroy(); await closing; }
   });
 
   it("requires a bearer fmsg API key", async () => {

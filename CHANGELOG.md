@@ -7,6 +7,7 @@
   original bytes, and keep Web API access checks authoritative. API-key deployments configure
   `FMSG_MCP_PUBLIC_URL`; OAuth reuses its resource URL. Inline downloads and stdio saves remain available.
 - Abort failed response streams so a truncated download cannot appear successful.
+- Close unused replacement connections on HTTP shutdown after cancelled downloads.
 
 ## 0.2.0 (unreleased)
 
