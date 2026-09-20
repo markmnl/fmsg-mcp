@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add HTTP-only `get_attachment_download_url` and authenticated binary attachment GETs. Links
+  contain no credentials; downloads reuse caller authentication and OAuth read scope, stream the
+  original bytes, and keep Web API access checks authoritative. API-key deployments configure
+  `FMSG_MCP_PUBLIC_URL`; OAuth reuses its resource URL. Inline downloads and stdio saves remain available.
+- Abort failed response streams so a truncated download cannot appear successful.
+
 ## 0.2.0 (unreleased)
 
 This is the next planned release; publication still happens through a `v0.2.0` GitHub release.

@@ -37,6 +37,12 @@ rather than a public issue.
 - Attachment transfers retain caller cancellation and client shutdown signals. They use a response
   header deadline followed by a per-read idle timeout (60 seconds each by default), so a progressing
   large download is not subject to a 60-second total duration limit.
+- HTTP attachment links contain no credentials and do not confer access. Every GET authenticates
+  the caller and uses its upstream client; OAuth also requires `fmsg:read`. The Web API decides
+  attachment visibility. Public URLs come from operator configuration, never forwarded headers.
+  Downloads stream with backpressure and force attachment disposition, no-store caching and nosniff.
+  Failed streams terminate the connection so partial files cannot appear successfully completed.
+  Query parameters are refused. Authenticated download links require support in the AI host.
 - Error previews are limited to 2 KiB while reading, except canonical JSON HTTP 400/413 responses:
   those retain the host's acceptance/size-policy explanation. Selected credentials are still redacted;
   oversized previews are explicitly marked as truncated.

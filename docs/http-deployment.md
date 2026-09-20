@@ -8,6 +8,7 @@ Keep port 8765 bound to loopback. The command below uses API keys; for OAuth add
 ```sh
 FMSG_API_URL=https://api.example.com \
 FMSG_MCP_ALLOWED_HOSTS=mcp.example.com \
+FMSG_MCP_PUBLIC_URL=https://mcp.example.com/mcp \
 FMSG_MCP_ALLOWED_ORIGINS=https://mcp.example.com,https://app.example.com \
 npx -y @markmnl/fmsg-mcp --http 127.0.0.1:8765
 ```
@@ -20,7 +21,7 @@ Save this as `Caddyfile`:
 
 ```caddyfile
 mcp.example.com {
-    @fmsg path /mcp /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
+    @fmsg path /mcp /mcp/attachments/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
     handle @fmsg {
         reverse_proxy 127.0.0.1:8765 {
             transport http {
@@ -51,3 +52,30 @@ and cancellation through the actual deployed proxy before advertising that deplo
 The metadata routes are public in OAuth mode and must reach the server for MCP authorization
 discovery. In API-key mode they return 404. When OAuth is configured, its resource URL supplies
 the public same-origin value, so explicitly listing that origin is optional.
+
+## Binary attachment downloads
+
+`get_attachment_download_url` returns a resource link such as
+`https://mcp.example.com/mcp/attachments/123/report.pdf`. The host fetches it with an authenticated
+GET, using the same `Authorization: Bearer ...` header as its MCP connection. OAuth requires
+`fmsg:read`; the server exchanges the incoming token for a Web API token as usual. The Web API
+checks visibility on every download, even when a link was obtained earlier.
+
+Set `FMSG_MCP_PUBLIC_URL` to the exact external MCP endpoint when using API keys. OAuth defaults
+to `FMSG_MCP_OAUTH_RESOURCE_URL`; if both are set, they must match. These URLs require HTTPS outside
+loopback and cannot contain credentials, queries or fragments. Request Host and forwarded headers
+never select the download URL. If the proxy exposes MCP under a different public path, map that
+path and its `/attachments/*` suffix to `/mcp` and `/mcp/attachments/*` respectively.
+
+Downloads use the original MIME type, `Content-Disposition: attachment`, Unicode filename encoding,
+`Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. The body streams with backpressure;
+disconnects cancel the upstream request and incomplete transfers abort rather than complete as a
+truncated file. No temporary server files, signed URLs or tokens in query strings are used.
+Range/resume requests are not implemented: GET returns the full file. Treat a failed transfer as
+incomplete and discard its partial local output before retrying.
+
+Host and Origin validation applies to downloads too. Allowed browser clients can preflight GET
+with Authorization and read Content-Disposition. Hosts must attach the connection credential
+themselves; never ask the model to locate or copy tokens. Clients that cannot fetch authenticated
+links can still use `download_attachment` inline. Compatibility of authenticated links with each
+third-party AI host must be tested before advertising support.

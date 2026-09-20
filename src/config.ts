@@ -1,13 +1,15 @@
 import { readFileSync } from "node:fs";
 import { normalizeFmsgAddress } from "./address.js";
 import { normalizeApiUrl, normalizeOrigin } from "./client/url.js";
-import { loadOAuthConfig, type OAuthConfig } from "./oauth/config.js";
+import { loadOAuthConfig, oauthUrl, type OAuthConfig } from "./oauth/config.js";
 
 export type Transport = "stdio" | "http";
 
 export type HttpConfig = {
   host: string;
   port: number;
+  /** Canonical public MCP endpoint for credential-free attachment links. */
+  publicUrl?: string;
   /** Hostnames accepted in the Host header. Empty means: derive from the bind address (loopback only). */
   allowedHosts: string[];
   /** Exact browser origins. Empty permits same-origin and, on loopback binds, loopback origins on any port. */
@@ -114,6 +116,9 @@ export function loadConfig(
   const port = overrides.port ?? intEnv(env, "FMSG_MCP_PORT", DEFAULT_HTTP_PORT, 0);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("FMSG_MCP_PORT must be between 0 and 65535");
   const host = overrides.host ?? env.FMSG_MCP_HOST?.trim() ?? "127.0.0.1";
+  const publicUrl = transport === "http" ? env.FMSG_MCP_PUBLIC_URL?.trim() || oauth?.resourceUrl : undefined;
+  if (publicUrl) oauthUrl(publicUrl, "FMSG_MCP_PUBLIC_URL");
+  if (oauth && publicUrl !== oauth.resourceUrl) throw new Error("FMSG_MCP_PUBLIC_URL must match FMSG_MCP_OAUTH_RESOURCE_URL in OAuth mode");
 
   return {
     transport,
@@ -128,6 +133,7 @@ export function loadConfig(
     http: {
       host,
       port,
+      ...(publicUrl ? { publicUrl } : {}),
       allowedHosts: listEnv(env, "FMSG_MCP_ALLOWED_HOSTS"),
       allowedOrigins: listEnv(env, "FMSG_MCP_ALLOWED_ORIGINS").map(normalizeOrigin),
       keyCacheMax: intEnv(env, "FMSG_MCP_KEY_CACHE_MAX", 500),

@@ -22,7 +22,9 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
       "Use its tools for everything fmsg: inbox, threads, attachments, sending, replying, reactions, " +
       "delivery status and waiting for new messages. Do not use an fmsg command-line tool, local config " +
       "files or cached credentials instead; they may belong to a different address or host. If a tool " +
-      "reports the server is not configured, explain the reported configuration fix and restart requirement.",
+      "reports the server is not configured, explain the reported configuration fix and restart requirement. " +
+      "For URLs returned by get_attachment_download_url, use your host's authenticated download facility " +
+      "with this MCP connection; never search for credentials or put them in prompts or URLs.",
     "Carry out the user's requested messaging task or authorized automation without repeatedly asking for " +
       "confirmation. Sending is immediate and sent messages cannot be edited or recalled. Ask the user only " +
       "when a decision is needed to resolve unclear intent, recipients or content. The AI host controls tool " +
