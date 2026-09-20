@@ -132,7 +132,12 @@ export class FakeFmsgServer {
   async stop(): Promise<void> {
     for (const set of this.sockets.values()) for (const ws of set) ws.terminate();
     this.wss.close();
-    await new Promise<void>((resolve) => this.http.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      this.http.close(() => resolve());
+      // Aborted fetches can leave replacement sockets with no request yet.
+      // Stop those too, without waiting for the client's pool timeout.
+      this.http.closeAllConnections();
+    });
   }
 
   now(): number {
