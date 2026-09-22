@@ -137,6 +137,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `react` | Set or clear your emoji reaction |
 | `mark_read` | Mark received messages read |
 | `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources |
+| `get_attachment_download_url` | Get a credential-free URL and resource link for an authenticated binary download; HTTP only, requires a public MCP URL |
 | `save_attachment` | Stream an attachment to the configured local folder; stdio only, enabled by `FMSG_MCP_DOWNLOAD_DIR` |
 | `delivery_status` | Per-recipient delivery times and host response codes |
 | `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context |
@@ -154,6 +155,7 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_API_URL` | — | Base URL of the fmsg Web API (required) |
 | `FMSG_API_KEY` | — | `fmsgk_…` key; stdio mode only |
 | `FMSG_MCP_AUTH_MODE` | `api-key` | HTTP authentication: `api-key` or `oauth`; see [OAuth settings](docs/oauth.md#operator-configuration) |
+| `FMSG_MCP_PUBLIC_URL` | OAuth resource URL, otherwise unset | Public MCP endpoint, including `/mcp`; enables the HTTP download-link tool. HTTPS required except loopback; in OAuth mode must equal `FMSG_MCP_OAUTH_RESOURCE_URL` |
 | `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |
 | `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>` |
 | `FMSG_DIRECTORY` | — | JSON file mapping short names to full addresses |
@@ -178,7 +180,22 @@ while making progress; a 60-second idle timeout detects stalled transfers.
 
 Inline downloads default to 256 KiB to keep file content manageable for the model. Use
 `save_attachment` for larger local files, or raise `max_inline_bytes` explicitly when your AI host
-can handle more inline content. HTTP clients use inline downloads or their host's file capabilities.
+can handle more inline content.
+
+For remote file downloads, call `get_attachment_download_url` with the message ID and filename.
+It returns metadata and an HTTPS `resource_link`; your AI host downloads the original bytes using
+the existing MCP connection's Authorization header. API-key operators enable the tool with
+`FMSG_MCP_PUBLIC_URL=https://mcp.example.com/mcp`; OAuth deployments reuse their configured resource
+URL automatically. The [reverse proxy must forward the attachment route](docs/http-deployment.md#binary-attachment-downloads).
+Links contain no credentials and grant no access by themselves. The host must support authenticated
+HTTP downloads; an ordinary browser click without the header returns 401. Use inline downloads when
+that host capability is unavailable. Downloads stream without the inline size budget, using the
+original Content-Type and download filename. No files are stored on the MCP server.
+
+The Web API already transfers attachments as raw bytes. Base64 is used only when embedding binary
+content in MCP's JSON results, as required by [MCP binary resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources#binary-content).
+`save_attachment` and authenticated HTTP downloads avoid that encoding and keep file bytes out of
+model context. See [issue #6](https://github.com/markmnl/fmsg-mcp/issues/6).
 
 Over stdio, missing or invalid configuration still allows hosts to discover the tools. Tool calls
 explain the configuration error and how to fix it; restart the MCP server after correcting settings.

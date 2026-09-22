@@ -281,6 +281,80 @@ describe("HTTP OAuth", () => {
     expect(idp.exchanges).toHaveLength(2);
   });
 
+  it("offers authenticated binary links using the OAuth resource URL and a separate upstream token", async () => {
+    const bytes = Buffer.from([0, 255, 128, 10, 13]);
+    const message = api.seed({ from: ALICE, to: [ALICE], attachments: [{ filename: "file.bin", data: bytes }] });
+    const token = await idp.token({ scope: "fmsg:read" });
+    const client = await connect(token);
+    const result = await call(client, "get_attachment_download_url", { id: message.id, filename: "file.bin" });
+    const link = structured<{ download_url: string }>(result).download_url;
+    expect(link).toBe(`${idp.config.resourceUrl}/attachments/${message.id}/file.bin`);
+    expect(result.content.map(c => c.type)).toEqual(["text", "resource_link"]);
+    expect(JSON.stringify(result)).not.toContain(token);
+    const response = await fetch(`${base}${new URL(link).pathname}`, { headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+    expect(idp.exchanges).toHaveLength(1);
+    for (const req of api.requests) {
+      expect(req.authorization).toBe(`Bearer ${idp.exchanges[0]!.token}`);
+      expect(req.authorization).not.toBe(`Bearer ${token}`);
+      expect(req.actAs).toBeUndefined();
+    }
+    const denied = await fetch(`${base}${new URL(link).pathname}`, { headers: { authorization: `Bearer ${await idp.token({ sub: BOB })}` } });
+    expect(denied.status).toBe(404);
+    await denied.body?.cancel();
+  });
+
+  it("requires a valid OAuth token and read scope for direct download GETs before exchange", async () => {
+    const url = `${base}/mcp/attachments/123/file.bin`;
+    for (const token of [undefined, "invalid", await idp.token({ exp: 1 })]) {
+      const response = await fetch(url, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
+      await response.body?.cancel();
+    }
+    const response = await fetch(url, { headers: { authorization: `Bearer ${await idp.token({ scope: "fmsg:write" })}` } });
+    expect(response.status).toBe(403);
+    expect(response.headers.get("www-authenticate")).toContain('scope="fmsg:read"');
+    await response.body?.cancel();
+    expect(idp.exchanges).toHaveLength(0);
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it("propagates upstream download scope denial and rechecks a revoked grant on token renewal", async () => {
+    const message = api.seed({ from: ALICE, to: [ALICE], attachments: [{ filename: "file.bin", data: Buffer.from([255]) }] });
+    const token = await idp.token();
+    const url = `${base}/mcp/attachments/${message.id}/file.bin`;
+    const headers = { authorization: `Bearer ${token}` };
+    api.failNext = { match: /\/attach\//u, status: 403, error: "delegated route denied", challenge: 'Bearer error="insufficient_scope"' };
+    const denied = await fetch(url, { headers });
+    expect(denied.status).toBe(403);
+    expect(denied.headers.get("www-authenticate")).toContain('scope="fmsg:read"');
+    expect(await denied.text()).toContain("delegated route denied");
+    expect(api.requests).toHaveLength(1);
+    idp.revoked.add(token);
+    api.rejectNextProtected = true;
+    const revoked = await fetch(url, { headers });
+    expect(revoked.status).toBe(401);
+    expect(revoked.headers.get("www-authenticate")).toContain('error="invalid_token"');
+    expect(await revoked.text()).not.toContain(token);
+    expect(idp.exchanges).toHaveLength(2);
+    expect(provider.size).toBe(0);
+  });
+
+  it.each([["invalid_grant", 401], ["invalid_client", 500], ["invalid_target", 500], ["temporarily_unavailable", 503]] as const)(
+    "maps direct download exchange %s to HTTP %i", async (code, status) => {
+      idp.exchangeError = code;
+      const token = await idp.token();
+      const response = await fetch(`${base}/mcp/attachments/123/file.bin`, { headers: { authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(status);
+      const body = await response.text();
+      expect(body).not.toContain(token);
+      expect(body).not.toContain(idp.config.clientSecret);
+      expect(api.requests).toHaveLength(0);
+    },
+  );
+
   it("renews an expiring socket and catches up within the same wait", async () => {
     idp.exchangeTtl = 0.8;
     const token = await idp.token();
@@ -320,7 +394,7 @@ describe("HTTP OAuth", () => {
   it("returns 401 when the incoming token expires during a wait before streaming begins", async () => {
     const token = await idp.token({ exp: Date.now() / 1000 + 1 });
     const response = await post(token, "tools/call", { name: "wait_for_message", arguments: { after_id: "0", timeout_seconds: 5 } });
-    expect(response.status).toBe(401);
+    expect(response.status, `${await response.clone().text()}\n${logs.join("\n")}`).toBe(401);
     expect(response.headers.get("www-authenticate")).toContain('error="invalid_token"');
     expect(await response.json()).toMatchObject({ error: "invalid_token" });
     // An early renewal can start just before subject expiry. Both paths must

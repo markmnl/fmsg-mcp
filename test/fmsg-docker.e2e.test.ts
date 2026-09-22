@@ -109,6 +109,7 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
     const http: HttpServerHandle = createHttpServer(config, () => undefined);
     await new Promise<void>((r) => http.server.listen(0, "127.0.0.1", r));
     const port = (http.server.address() as AddressInfo).port;
+    config.http.publicUrl = `http://127.0.0.1:${port}/mcp`;
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
       requestInit: { headers: { authorization: `Bearer ${env("FMSG_E2E_ALICE_API_KEY")}` } },
     });
@@ -116,6 +117,15 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
     await client.connect(transport);
     try {
       expect(structured<{ address: string; transport: string }>(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
+      const bytes = Buffer.from([0, 255, 128, 13, 10, 42]);
+      const sent = structured<{ id: string }>(await call(client, "send_message", { to: [BOB], topic: `binary download ${token}`, body: "binary attachment",
+        attachments: [{ filename: "binary.bin", data_base64: bytes.toString("base64"), content_type: "application/octet-stream" }] }));
+      const link = structured<{ download_url: string }>(await call(client, "get_attachment_download_url", { id: sent.id, filename: "binary.bin" }));
+      expect((await fetch(link.download_url)).status).toBe(401);
+      const download = await fetch(link.download_url, { headers: { authorization: `Bearer ${env("FMSG_E2E_ALICE_API_KEY")}` } });
+      expect(download.status).toBe(200);
+      expect(download.headers.get("content-disposition")).toContain("attachment;");
+      expect(Buffer.from(await download.arrayBuffer())).toEqual(bytes);
     } finally {
       await client.close();
       await http.close();

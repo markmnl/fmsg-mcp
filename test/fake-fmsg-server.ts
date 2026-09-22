@@ -87,6 +87,8 @@ export class FakeFmsgServer {
   failNext: { match: RegExp; status: number; error: string; code?: string; challenge?: string } | undefined;
   /** Force the next protected request to answer 401 (expired JWT simulation). */
   rejectNextProtected = false;
+  /** Override an authorized attachment response to exercise streaming failures/cancellation. */
+  attachmentResponse?: (req: IncomingMessage, res: ServerResponse, attachment: StoredMessage["attachments"][number]) => void;
   /** Make thread/messages answer 422 thread_too_deep. */
   threadTooDeep = false;
   shortTextBytes = 768;
@@ -130,7 +132,12 @@ export class FakeFmsgServer {
   async stop(): Promise<void> {
     for (const set of this.sockets.values()) for (const ws of set) ws.terminate();
     this.wss.close();
-    await new Promise<void>((resolve) => this.http.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      this.http.close(() => resolve());
+      // Aborted fetches can leave replacement sockets with no request yet.
+      // Stop those too, without waiting for the client's pool timeout.
+      this.http.closeAllConnections();
+    });
   }
 
   now(): number {
@@ -457,6 +464,7 @@ export class FakeFmsgServer {
       if (idx < 0) return this.json(res, 404, { error: "attachment not found" });
       if (method === "GET") {
         const a = m.attachments[idx]!;
+        if (this.attachmentResponse) return this.attachmentResponse(req, res, a);
         res.writeHead(200, { "content-type": a.type, "content-length": String(a.size), "content-disposition": "attachment" });
         return res.end(a.data);
       }

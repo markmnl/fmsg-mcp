@@ -31,6 +31,7 @@ src/context.ts      CallerProvider: fixed caller over stdio, per-bearer-credenti
 src/auth.ts         HTTP bearer verifier: key hash → cached FmsgClient + address
 src/oauth/          HTTP OAuth discovery, validation, scopes and token exchange
 src/http.ts         node:http server, /mcp + /healthz, Host/Origin allowlist, bearer gate
+src/download.ts     binary download URLs, path validation and attachment headers
 src/tools/*.ts      one file per tool group; src/tools/common.ts has shared schemas/helpers
 src/wait.ts         wait_for_message engine (WebSocket first, inbox catch-up, settle batching)
 src/thread.ts       thread assembly via /thread/messages with a pid-walk fallback
@@ -59,6 +60,10 @@ OAuth mode validates incoming tokens for the exact MCP audience and exchanges th
 separate Web API token. Never forward the incoming JWT or send `X-FMSG-Act-As`. Keep scope
 classification in `src/oauth/scopes.ts` synchronized with tools; reply needs read and write.
 See `docs/oauth.md` for the vendor-neutral claims contract and deployment requirements.
+
+HTTP attachment downloads at `/mcp/attachments/{id}/{filename}` reuse the bearer gate and upstream
+caller; OAuth requires `fmsg:read`. Link generation uses only the configured public MCP URL (the
+OAuth resource URL by default), never Host or forwarded headers. Keep credentials out of links.
 
 ## Adding a tool
 

@@ -80,6 +80,12 @@ use pre-registered clients or Client ID Metadata Documents where supported by bo
 host. Check the intended host's registration support before advertising compatibility. This
 implementation does not add a registration proxy, login UI or consent UI.
 
+The resource URL also supplies the public URL for `get_attachment_download_url`. Its links contain
+no credentials; hosts fetch them using the current MCP bearer token, with `fmsg:read`. The binary
+GET route uses the same token validation and Web API token exchange, and exposes the same metadata
+challenge on authentication failure. See [binary downloads](http-deployment.md#binary-attachment-downloads)
+for reverse-proxy routing and host compatibility requirements.
+
 ## Token validation and scopes
 
 Incoming access tokens must be signed EdDSA JWTs with `typ: at+jwt`, a nonempty `kid` in the
