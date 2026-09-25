@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional `FMSG_API_PUBLIC_URL`: the Web API URL `whoami` reports to users, while requests
+  keep using `FMSG_API_URL`. It defaults to `FMSG_API_URL`, except that HTTP mode no longer
+  reports a cleartext (internal or loopback) upstream URL. `whoami`'s `api_url` is therefore
+  nullable and is `null` when no public URL is known.
 - Add HTTP-only `get_attachment_download_url` and authenticated binary attachment GETs. Links
   contain no credentials; downloads reuse caller authentication and OAuth read scope, stream the
   original bytes, and keep Web API access checks authoritative. API-key deployments configure

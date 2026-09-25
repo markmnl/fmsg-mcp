@@ -10,12 +10,13 @@ export const registerIdentityTools: Register = (server, deps) => {
     {
       title: "Show fmsg identity",
       description:
-        "Report the fmsg address this server acts as (from the authenticated connection), the fmsg Web API URL, " +
+        "Report the fmsg address this server acts as (from the authenticated connection), the fmsg Web API URL " +
+        "(null when the server does not publish it), " +
         "when the current access token expires (it is renewed automatically; no action needed), and the " +
         "address-resolution defaults. Call this first if unsure who you are sending as.",
       outputSchema: z.object({
         address: z.string(),
-        api_url: z.string(),
+        api_url: z.string().nullable(),
         token_expires_at: z.string().nullable(),
         transport: z.enum(["stdio", "http"]),
         default_domain: z.string().nullable(),
@@ -28,14 +29,16 @@ export const registerIdentityTools: Register = (server, deps) => {
         const expires = isoTime((await caller.tokenExpiresAt()) / 1000);
         const structured = {
           address: caller.address,
-          api_url: caller.client.apiUrl,
+          api_url: deps.config.apiPublicUrl ?? null,
           token_expires_at: expires,
           transport: deps.config.transport,
           default_domain: deps.config.defaultDomain ?? null,
           directory_names: Object.keys(deps.config.directory ?? {}),
         };
         const lines = [
-          `You are **${caller.address}** on ${caller.client.apiUrl} (${deps.config.transport}).`,
+          deps.config.apiPublicUrl
+            ? `You are **${caller.address}** on ${deps.config.apiPublicUrl} (${deps.config.transport}).`
+            : `You are **${caller.address}** (${deps.config.transport}).`,
           `Access token expires ${expires ?? "unknown"} and is renewed automatically.`,
         ];
         if (deps.config.defaultDomain) lines.push(`Short names resolve to @name@${deps.config.defaultDomain}.`);
