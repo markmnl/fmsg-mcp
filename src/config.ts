@@ -21,6 +21,12 @@ export type HttpConfig = {
 export type Config = {
   transport: Transport;
   apiUrl: string;
+  /**
+   * The Web API URL shown to users (whoami). FMSG_API_PUBLIC_URL when set; otherwise FMSG_API_URL,
+   * except over HTTP where a cleartext upstream (typically a private or loopback address the
+   * server reaches internally) is not shown. Never used for requests.
+   */
+  apiPublicUrl?: string;
   /** Explicit opt-in for cleartext upstream traffic outside loopback. */
   allowInsecureHttp?: boolean;
   /** Only set in stdio mode. */
@@ -73,6 +79,25 @@ function loadDirectory(path: string): Record<string, string> {
   return out;
 }
 
+/**
+ * Resolve the Web API URL shown to users. An explicit FMSG_API_PUBLIC_URL is validated like
+ * FMSG_API_URL. Without it, stdio shows FMSG_API_URL (the user's own configuration), while HTTP
+ * shows it only when it is HTTPS: a cleartext upstream on a hosted server is an internal address
+ * that means nothing to remote clients.
+ */
+function resolveApiPublicUrl(
+  env: NodeJS.ProcessEnv,
+  transport: Transport,
+  apiUrl: string,
+  allowInsecureHttp: boolean,
+): string | undefined {
+  const explicit = env.FMSG_API_PUBLIC_URL?.trim();
+  if (explicit) return normalizeApiUrl(explicit, allowInsecureHttp, "FMSG_API_PUBLIC_URL");
+  if (!apiUrl) return undefined;
+  if (transport === "http" && !apiUrl.startsWith("https:")) return undefined;
+  return apiUrl;
+}
+
 export type ConfigOverrides = { host?: string; port?: number };
 
 export type LoadConfigOptions = {
@@ -98,6 +123,7 @@ export function loadConfig(
   }
   const allowInsecureHttp = env.FMSG_ALLOW_INSECURE_HTTP === "1";
   const normalizedApiUrl = apiUrl ? normalizeApiUrl(apiUrl, allowInsecureHttp) : "";
+  const apiPublicUrl = resolveApiPublicUrl(env, transport, normalizedApiUrl, allowInsecureHttp);
 
   const apiKey = env.FMSG_API_KEY?.trim();
   if (transport === "stdio" && apiKey && !apiKey.startsWith("fmsgk_")) throw new Error("FMSG_API_KEY must start with fmsgk_");
@@ -123,6 +149,7 @@ export function loadConfig(
   return {
     transport,
     apiUrl: normalizedApiUrl,
+    ...(apiPublicUrl ? { apiPublicUrl } : {}),
     ...(oauth ? { oauth } : {}),
     allowInsecureHttp,
     ...(transport === "stdio" && apiKey ? { apiKey } : {}),

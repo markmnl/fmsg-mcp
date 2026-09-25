@@ -125,7 +125,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 
 | Tool | What it does |
 |---|---|
-| `whoami` | The address this server acts as, the API URL and token expiry |
+| `whoami` | The address this server acts as, the public API URL (when known) and token expiry |
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
 | `list_messages` | Inbox, newest first, with previews; reactions hidden; optional unread filter |
 | `list_sent` | Sent messages with per-recipient delivery state |
@@ -154,6 +154,7 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 |---|---|---|
 | `FMSG_API_URL` | — | Base URL of the fmsg Web API (required) |
 | `FMSG_API_KEY` | — | `fmsgk_…` key; stdio mode only |
+| `FMSG_API_PUBLIC_URL` | `FMSG_API_URL` (HTTP mode: only if HTTPS) | Web API URL reported to users by `whoami`; never used for requests. Set it when the server reaches the Web API at an internal address. Without it, HTTP mode reports no URL for a cleartext `FMSG_API_URL`. Validated like `FMSG_API_URL` |
 | `FMSG_MCP_AUTH_MODE` | `api-key` | HTTP authentication: `api-key` or `oauth`; see [OAuth settings](docs/oauth.md#operator-configuration) |
 | `FMSG_MCP_PUBLIC_URL` | OAuth resource URL, otherwise unset | Public MCP endpoint, including `/mcp`; enables the HTTP download-link tool. HTTPS required except loopback; in OAuth mode must equal `FMSG_MCP_OAUTH_RESOURCE_URL` |
 | `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |

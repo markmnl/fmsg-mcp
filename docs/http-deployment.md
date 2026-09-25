@@ -13,7 +13,12 @@ FMSG_MCP_ALLOWED_ORIGINS=https://mcp.example.com,https://app.example.com \
 npx -y @markmnl/fmsg-mcp --http 127.0.0.1:8765
 ```
 
-`FMSG_API_KEY` must be unset in HTTP mode. Include only browser origins you use. Behind TLS,
+`FMSG_API_KEY` must be unset in HTTP mode. Include only browser origins you use.
+
+If the server reaches the Web API at an internal address instead, for example
+`FMSG_API_URL=http://10.0.0.5:8000` with `FMSG_ALLOW_INSECURE_HTTP=1` on a private network, also set
+`FMSG_API_PUBLIC_URL=https://api.example.com` so `whoami` reports the URL users know. Without it,
+`whoami` omits the API URL rather than show the internal address. Behind TLS,
 list the public HTTPS origin explicitly: the server sees the proxy's HTTP connection and does
 not trust forwarded headers to establish the request origin.
 
