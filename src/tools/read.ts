@@ -6,10 +6,11 @@ import { downloadBaseUrl } from "../download.js";
 import { messageData, isoTime, renderMessage, truncateUtf8, truncationNote } from "../render.js";
 import { assembleThread, renderThread, threadNext } from "../thread.js";
 import {
-  READ_ONLY, type Register, type ToolDeps, UNTRUSTED, deliveryItem, deliveryOf, idSchema, messageItem, ok, toItem, untrustedNotice, withCaller,
+  READ_ONLY, type Register, type ToolDeps, UNTRUSTED, attachmentItem, deliveryItem, deliveryOf, idSchema, messageItem, ok, openEnum, outputObject, toItem,
+  untrustedNotice, withCaller,
 } from "./common.js";
 
-const assembledMessage = z.object({
+const assembledMessage = outputObject({
   id: z.string(),
   pid: z.string().nullable(),
   visible: z.boolean(),
@@ -23,7 +24,7 @@ const assembledMessage = z.object({
   body: z.string().nullable(),
   body_truncated: z.boolean(),
   body_bytes: z.number().optional().describe("decoded body length when the body text was read"),
-  attachments: z.array(z.object({ filename: z.string(), size: z.number(), type: z.string() })),
+  attachments: z.array(attachmentItem),
 });
 
 /** Where larger attachments can go, naming only the tools this server registered. */
@@ -47,7 +48,7 @@ export const registerReadTools: Register = (server, deps) => {
         id: idSchema,
         max_body_bytes: z.number().int().min(0).max(1_048_576).default(65_536).describe("truncate the body beyond this many bytes"),
       }),
-      outputSchema: z.object({
+      outputSchema: outputObject({
         message: messageItem,
         body: z.string().nullable().describe("null for non-text bodies"),
         body_truncated: z.boolean(),
@@ -89,18 +90,18 @@ export const registerReadTools: Register = (server, deps) => {
         max_body_bytes_per_message: z.number().int().min(0).max(1_048_576).default(16_384),
         max_total_bytes: z.number().int().min(0).max(8_388_608).default(262_144),
       }),
-      outputSchema: z.object({
+      outputSchema: outputObject({
         root_id: z.string(),
         trigger_id: z.string(),
         complete: z.boolean(),
-        source: z.enum(["thread_messages", "pid_walk"]),
-        thread_topic: z.string().nullable().describe("the thread root's topic (replies carry none); null when the root is not visible"),
+        source: openEnum(["thread_messages", "pid_walk"]),
+        thread_topic: z.string().nullable().optional().describe("the thread root's topic (replies carry none); null when the root is not visible"),
         participants: z.array(z.string()).describe("everyone on the target message except you (reply-all default)"),
         reply_target_id: z.string(),
         terminal: z.boolean(),
         omitted: z.number(),
         messages: z.array(assembledMessage),
-        next: z.string().describe("how to continue the thread"),
+        next: z.string().optional().describe("how to continue the thread"),
         ...untrustedNotice,
       }),
       annotations: READ_ONLY,
@@ -127,7 +128,7 @@ export const registerReadTools: Register = (server, deps) => {
         "including some successful deliveries). Delivery to other hosts is asynchronous, so pending recipients may " +
         "still be delivered and the host may retry temporary failures.",
       inputSchema: z.object({ id: idSchema }),
-      outputSchema: z.object({
+      outputSchema: outputObject({
         id: z.string(),
         sent_at: z.string().nullable(),
         recipients: z.array(deliveryItem),
@@ -156,9 +157,9 @@ export const registerReadTools: Register = (server, deps) => {
       description: "Mark received messages as read, including reaction messages listed with include_reactions. " +
         "Reading a message with get_message does not mark it read.",
       inputSchema: z.object({ ids: z.array(idSchema).min(1).max(100) }),
-      outputSchema: z.object({
-        marked: z.array(z.object({ id: z.string(), time_read: z.string().nullable() })),
-        failed: z.array(z.object({ id: z.string(), error: z.string() })),
+      outputSchema: outputObject({
+        marked: z.array(outputObject({ id: z.string(), time_read: z.string().nullable() })),
+        failed: z.array(outputObject({ id: z.string(), error: z.string() })),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -197,7 +198,7 @@ export const registerReadTools: Register = (server, deps) => {
         filename: z.string().min(1).describe("attachment filename as listed on the message"),
         max_inline_bytes: z.number().int().min(0).max(16_777_216).default(262_144),
       }),
-      outputSchema: z.object({
+      outputSchema: outputObject({
         id: z.string(),
         filename: z.string(),
         size: z.number(),

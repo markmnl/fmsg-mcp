@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Tool output schemas are open and additive, so hosts that cache a tool's `outputSchema` when the
+  connector is added keep validating results after upgrades. Every output object, at every depth,
+  accepts unknown properties (no `additionalProperties: false`); values that may grow (statuses,
+  transports, resolutions, delivery `status` and `via`, skip reasons, `authentication`) are strings
+  with their current values in the description instead of enums; and only fields present since
+  0.2.5 are required, so fields added later are optional in the schema though still returned.
+  Schemas published by 0.2.6 and earlier were closed, so hosts that cached one reject results with
+  newer fields ("must NOT have additional properties") until the connector is reconnected once;
+  no server change can fix an already-cached closed schema.
+- `whoami` again matches its 0.2.5 shape: `transport` is `stdio` or `http` (0.2.6 reported
+  `streamable-http`; the text still says Streamable HTTP) and `directory_names` is always present,
+  empty when there is no directory. Hosts holding 0.2.5 schemas validate `whoami`,
+  `resolve_address`, `mark_read` and `react` again. Hosts that cached 0.2.6 schemas validate every
+  tool except `whoami` over HTTP, which needs the one-time reconnect.
+- Tests check that no published output schema is closed or uses `enum`/`const`, that required
+  fields match 0.2.5, and that representative results of every tool validate against the
+  published schemas and against the 0.2.5 schemas apart from unknown properties.
+
 - Graceful shutdown. On SIGINT/SIGTERM or `HttpServerHandle.close()`, in-flight `wait_for_message`
   calls return at once with the new status `interrupted`, the caller's `after_id` and a `next`
   step ("call again with the same after_id; no messages are lost") instead of hanging until the
@@ -34,9 +52,8 @@
   count as pending rather than failed.
 - List items add `reaction` (the emoji when the item is itself a reaction). Hidden reactions never
   count as unread; `mark_read` accepts listed ones.
-- `whoami` reports `transport` as `stdio` or `streamable-http` (was `http`), says "connected over
-  Streamable HTTP", and no longer states the token expiry in its text; `token_expires_at` stays in
-  the structured result, described as internal. `directory_names` is omitted when empty.
+- `whoami` says "connected over Streamable HTTP" and no longer states the token expiry in its
+  text; `token_expires_at` stays in the structured result, described as internal.
   `resolve_address`'s description names only the resolution steps the operator configured.
 - Descriptions and errors mention `save_attachment` and `get_attachment_download_url` only where
   those tools are registered. The server instructions now state that other fmsg tools or local

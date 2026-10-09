@@ -3,7 +3,7 @@ import { resolveAddresses, sameAddress } from "../address.js";
 import type { OutboundAttachment } from "../client/types.js";
 import { toolError } from "../errors.js";
 import { attachmentType, isoTime, participantsOf } from "../render.js";
-import { SENDS, type Register, attachmentItem, idSchema, ok, resolverFor, withCaller } from "./common.js";
+import { SENDS, type Register, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 
 const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
@@ -26,7 +26,7 @@ function decodeAttachments(items: z.infer<typeof attachmentInput>[] | undefined)
   });
 }
 
-const sentOutput = z.object({
+const sentOutput = outputObject({
   id: z.string(),
   time: z.string().nullable(),
   from: z.string(),
@@ -166,10 +166,10 @@ export const registerSendTools: Register = (server, deps) => {
         recipients: z.array(z.string()).min(1).optional().describe("addresses or short names to add"),
         add_to: z.array(z.string()).min(1).optional().describe("deprecated alias of recipients; pass one or the other"),
       }),
-      outputSchema: z.object({
+      outputSchema: outputObject({
         id: z.string(),
         added: z.number(),
-        recipients: z.array(z.string()),
+        recipients: z.array(z.string()).optional().describe("the resolved addresses that were added"),
         add_to: z.array(z.string()).describe("deprecated copy of recipients"),
       }),
       annotations: { ...SENDS, idempotentHint: true },
@@ -195,7 +195,7 @@ export const registerSendTools: Register = (server, deps) => {
         id: idSchema,
         emoji: z.string().max(32).nullable().describe("a single emoji; null or empty clears your reaction"),
       }),
-      outputSchema: z.object({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
+      outputSchema: outputObject({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
       annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
     },
     async ({ id, emoji }, ctx) =>

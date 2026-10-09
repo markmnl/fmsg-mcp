@@ -1,14 +1,12 @@
 import * as z from "zod/v4";
 import { type AddressResolver, CALLER_DOMAIN, effectiveDefaultDomain, resolveAddress } from "../address.js";
 import { isoTime } from "../render.js";
-import { READ_ONLY, type Register, ok, resolverFor, withCaller } from "./common.js";
+import { READ_ONLY, type Register, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { toolError } from "../errors.js";
 import type { Transport } from "../config.js";
 
-const TRANSPORT_NAMES: Record<Transport, { id: "stdio" | "streamable-http"; label: string }> = {
-  stdio: { id: "stdio", label: "stdio" },
-  http: { id: "streamable-http", label: "Streamable HTTP" },
-};
+/** Structured output keeps the transport ids published since 0.2.5; only the text uses the friendlier label. */
+const TRANSPORT_LABELS: Record<Transport, string> = { stdio: "stdio", http: "Streamable HTTP" };
 
 export const registerIdentityTools: Register = (server, deps) => {
   server.registerTool(
@@ -19,15 +17,15 @@ export const registerIdentityTools: Register = (server, deps) => {
         "Report the fmsg address this server acts as (from the authenticated connection), the fmsg Web API URL " +
         "(null when the server does not publish it), the MCP transport and the address-resolution defaults. " +
         "Access is renewed automatically; no action is needed. Call this first if unsure who you are sending as.",
-      outputSchema: z.object({
+      outputSchema: outputObject({
         address: z.string(),
         api_url: z.string().nullable(),
         token_expires_at: z.string().nullable().describe(
           "internal: when the server's current upstream access token expires; it is renewed automatically, so no action is needed",
         ),
-        transport: z.enum(["stdio", "streamable-http"]),
+        transport: openEnum(["stdio", "http"], "http is Streamable HTTP"),
         default_domain: z.string().nullable(),
-        directory_names: z.array(z.string()).optional().describe("short names in the operator-configured directory; omitted when there are none"),
+        directory_names: z.array(z.string()).describe("short names in the operator-configured directory; empty when there are none"),
       }),
       annotations: { ...READ_ONLY, openWorldHint: false },
     },
@@ -36,19 +34,19 @@ export const registerIdentityTools: Register = (server, deps) => {
         const expires = isoTime((await caller.tokenExpiresAt()) / 1000);
         const defaultDomain = effectiveDefaultDomain(deps.config.defaultDomain, caller.address);
         const directoryNames = Object.keys(deps.config.directory ?? {});
-        const transport = TRANSPORT_NAMES[deps.config.transport];
+        const transport = TRANSPORT_LABELS[deps.config.transport];
         const structured = {
           address: caller.address,
           api_url: deps.config.apiPublicUrl ?? null,
           token_expires_at: expires,
-          transport: transport.id,
+          transport: deps.config.transport,
           default_domain: defaultDomain ?? null,
-          ...(directoryNames.length ? { directory_names: directoryNames } : {}),
+          directory_names: directoryNames,
         };
         const lines = [
           deps.config.apiPublicUrl
-            ? `You are **${caller.address}** on ${deps.config.apiPublicUrl}, connected over ${transport.label}.`
-            : `You are **${caller.address}**, connected over ${transport.label}.`,
+            ? `You are **${caller.address}** on ${deps.config.apiPublicUrl}, connected over ${transport}.`
+            : `You are **${caller.address}**, connected over ${transport}.`,
           "Access is renewed automatically.",
         ];
         if (defaultDomain) lines.push(`Short names resolve to @name@${defaultDomain}.`);
@@ -72,7 +70,7 @@ export const registerIdentityTools: Register = (server, deps) => {
         `as-is${steps.length ? `, ${steps.join(", ")}` : "; this server has no short-name defaults, so other names fail"}. ` +
         "Fails when nothing matches so you can ask the user for the full address.",
       inputSchema: z.object({ name: z.string().describe("Full fmsg address (@user@domain) or a short name") }),
-      outputSchema: z.object({ address: z.string(), resolution: z.enum(["literal", "directory", "default_domain"]) }),
+      outputSchema: outputObject({ address: z.string(), resolution: openEnum(["literal", "directory", "default_domain"]) }),
       annotations: { ...READ_ONLY, openWorldHint: false },
     },
     async ({ name }, ctx) => {

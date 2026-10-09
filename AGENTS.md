@@ -47,6 +47,9 @@ test/fmsg-docker.e2e.test.ts   real two-host run, gated by FMSG_E2E=1
 - Every tool returns concise Markdown in `content[0].text` **and** `structuredContent` matching its
   `outputSchema`. Failures are `isError: true` results built by `src/errors.ts`, never thrown past
   the handler.
+- Output schemas stay open because hosts cache them: build every output object with `outputObject`,
+  type values that may grow with `openEnum` (never `z.enum`/`z.literal`), add new fields as optional,
+  and never remove or rename one. `test/output-schemas.test.ts` enforces this.
 - Irreversible send-type tools carry `destructiveHint: true`; reversible reactions use
   `destructiveHint: false` and `idempotentHint: true`. Read tools use `readOnlyHint: true`.
 - Outbound bodies/topics and every error string pass through `redactSecrets`. Never log an API key;

@@ -454,12 +454,12 @@ describe("tools (stdio-shaped)", () => {
     expect(tools.find((t) => t.name === "wait_for_message")!.description).toContain("each wait is a model turn");
   });
 
-  it("whoami keeps token timing out of its text and omits an empty directory", async () => {
+  it("whoami keeps token timing out of its text and reports an empty directory", async () => {
     const result = await call(h.client, "whoami");
     expect(text(result)).toContain("connected over stdio");
     expect(text(result)).toContain("Access is renewed automatically.");
     expect(text(result)).not.toMatch(/expires|\d{4}-\d{2}-\d{2}T/u);
-    expect(structured(result)).not.toHaveProperty("directory_names");
+    expect(structured(result)).toMatchObject({ transport: "stdio", directory_names: [] });
     const resolve = (await h.client.listTools()).tools.find((t) => t.name === "resolve_address")!;
     expect(resolve.description).not.toContain("directory");
     expect(resolve.description).toContain("otherwise @name@example.net");

@@ -128,7 +128,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 
 | Tool | What it does |
 |---|---|
-| `whoami` | The address this server acts as, the public API URL (when known), the transport (`stdio` or `streamable-http`) and short-name defaults |
+| `whoami` | The address this server acts as, the public API URL (when known), the transport (`stdio` or `http`, which is Streamable HTTP) and short-name defaults |
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
 | `list_messages` | Inbox, newest first, with previews and attachment types; reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |
@@ -150,6 +150,16 @@ bodies are labelled as data from other parties, not instructions; structured res
 other parties' words repeat that in `untrusted_content_notice`, since some hosts show the
 structured result instead of the text. Attachment types come from the host when it recorded one,
 otherwise from the filename extension, so every tool reports the same type.
+
+### Output schema compatibility
+
+Some MCP hosts cache each tool's `outputSchema` when the connector is added and validate every later
+result against that copy. Output schemas are therefore open and additive: objects accept unknown
+properties, values that may grow (statuses, transports, resolutions, delivery state) are strings
+whose current values are listed in their descriptions, and only fields present since 0.2.5 are
+required. Releases add fields and values; they do not remove or rename them. Schemas published by
+0.2.6 and earlier were closed, so a host that cached one rejects results with newer fields (for
+example "must NOT have additional properties"); remove and re-add the connector once to refresh it.
 
 Resources `fmsg://message/{id}` and `fmsg://thread/{id}` expose the same content to hosts that
 attach resources; prompts `chat` and `reply` script the wait → reply loop and a guided reply.

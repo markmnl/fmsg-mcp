@@ -63,6 +63,14 @@ The metadata routes are public in `oauth` and `oauth+api-key` modes and must rea
 MCP authorization discovery. In API-key mode they return 404. When OAuth is configured, its resource URL supplies
 the public same-origin value, so explicitly listing that origin is optional.
 
+## Upgrades and cached tool schemas
+
+Chat hosts may cache each tool's `outputSchema` from when the connector was added and validate
+results against it. Output schemas are open and additive (see "Output schema compatibility" in the
+README), so later upgrades keep validating. Schemas published by 0.2.6 and earlier were closed: after
+upgrading from those releases, users whose host reports that structured content does not match the
+tool's output schema must reconnect (remove and re-add) the connector once.
+
 ## Binary attachment downloads
 
 `get_attachment_download_url` returns a resource link such as

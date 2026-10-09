@@ -21,14 +21,30 @@ export const SENDS: ToolAnnotations = { readOnlyHint: false, destructiveHint: tr
 
 export const idSchema = z.string().regex(/^[0-9]+$/u, "fmsg message ids are decimal integers").describe("fmsg message id");
 
-export const attachmentItem = z.object({
+/**
+ * Output schemas must stay valid for hosts that cached an earlier copy and validate every later result against it.
+ * So every output object accepts unknown properties, and fields added after 0.2.5 are optional: a release may add
+ * fields and values but never remove or rename them.
+ */
+export const outputObject = z.looseObject;
+
+/**
+ * A string output whose current values are listed only in its description. Publishing an enum would make every
+ * new value fail validation for hosts holding the older schema.
+ */
+export function openEnum(values: readonly string[], detail?: string): z.ZodString {
+  const list = values.map((v) => JSON.stringify(v)).join(", ");
+  return z.string().describe(`one of ${list}${detail ? `; ${detail}` : ""}. More values may be added`);
+}
+
+export const attachmentItem = outputObject({
   filename: z.string(),
   size: z.number(),
-  type: z.string().describe("media type; inferred from the filename when the host records none"),
+  type: z.string().optional().describe("media type; inferred from the filename when the host records none"),
 });
 
 /** Structured results that carry other parties' words repeat the text's safety framing. */
-export const untrustedNotice = { untrusted_content_notice: z.string() };
+export const untrustedNotice = { untrusted_content_notice: z.string().optional() };
 export const UNTRUSTED = { untrusted_content_notice: UNTRUSTED_CONTENT_NOTICE };
 
 /** fmsg response codes (fmsg specification, Response Codes) a delivery record can carry; -1 is a host-local "no response". */
@@ -42,20 +58,21 @@ function responseCodeMeaning(code: number | null): string | null {
   return code === null ? null : (RESPONSE_CODES[code] ?? null);
 }
 
-export const deliveryItem = z.object({
+export const deliveryItem = outputObject({
   addr: z.string(),
-  status: z.enum(["delivered", "pending", "failed"]).describe(
+  status: openEnum(
+    ["delivered", "pending", "failed"],
     "delivered once the receiving host accepted it; failed when the last attempt was rejected (the host may retry temporary failures); otherwise pending",
   ),
   time: z.string().nullable().describe("when delivery was confirmed"),
   code: z.number().nullable().describe(
     "the receiving host's fmsg response code for the last attempt when recorded: 200 means accepted, other codes are rejections; null when not recorded, including some successful deliveries",
   ),
-  code_meaning: z.string().nullable().describe("the code's name in the fmsg specification, when known"),
-  via: z.enum(["to", "add_to"]),
+  code_meaning: z.string().nullable().optional().describe("the code's name in the fmsg specification, when known"),
+  via: openEnum(["to", "add_to"], "add_to for recipients added later"),
 });
 
-export const messageItem = z.object({
+export const messageItem = outputObject({
   id: z.string(),
   pid: z.string().nullable(),
   from: z.string(),
@@ -72,8 +89,8 @@ export const messageItem = z.object({
   size: z.number().describe("body size as stored by the host; the compressed size when the body was sent deflate-compressed"),
   preview: z.string().describe("start of the body; may be shorter than the full body"),
   attachments: z.array(attachmentItem),
-  reactions: z.array(z.object({ emoji: z.string(), from: z.array(z.string()) })),
-  reaction: z.string().nullable().describe("the emoji when this message is itself a reaction (\"\" clears one); null otherwise"),
+  reactions: z.array(outputObject({ emoji: z.string(), from: z.array(z.string()) })),
+  reaction: z.string().nullable().optional().describe("the emoji when this message is itself a reaction (\"\" clears one); null otherwise"),
 });
 export type MessageItem = z.infer<typeof messageItem>;
 
