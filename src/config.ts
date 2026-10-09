@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { normalizeFmsgAddress } from "./address.js";
+import { CALLER_DOMAIN, normalizeFmsgAddress } from "./address.js";
 import { normalizeApiUrl, normalizeOrigin } from "./client/url.js";
 import { loadOAuthConfig, oauthUrl, type OAuthConfig } from "./oauth/config.js";
 
@@ -31,6 +31,7 @@ export type Config = {
   allowInsecureHttp?: boolean;
   /** Only set in stdio mode. */
   apiKey?: string;
+  /** Domain for short names, or CALLER_DOMAIN for each caller's own domain. */
   defaultDomain?: string;
   directory?: Record<string, string>;
   /** Trusted local destination; enables save_attachment over stdio only. */
@@ -136,7 +137,8 @@ export function loadConfig(
     );
   }
 
-  const defaultDomain = env.FMSG_DEFAULT_DOMAIN?.trim().replace(/^@/u, "") || undefined;
+  const rawDefaultDomain = env.FMSG_DEFAULT_DOMAIN?.trim().replace(/^@/u, "") || undefined;
+  const defaultDomain = rawDefaultDomain?.toLowerCase() === CALLER_DOMAIN ? CALLER_DOMAIN : rawDefaultDomain;
   const directoryPath = env.FMSG_DIRECTORY?.trim();
 
   const port = overrides.port ?? intEnv(env, "FMSG_MCP_PORT", DEFAULT_HTTP_PORT, 0);

@@ -159,7 +159,7 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_MCP_AUTH_MODE` | `api-key` | HTTP authentication: `api-key`, `oauth`, or `oauth+api-key` to accept both on one endpoint; see [OAuth settings](docs/oauth.md#operator-configuration) and [combined mode](docs/oauth.md#combined-oauth-and-api-key-mode) |
 | `FMSG_MCP_PUBLIC_URL` | OAuth resource URL, otherwise unset | Public MCP endpoint, including `/mcp`; enables the HTTP download-link tool. HTTPS required except loopback; when OAuth is enabled must equal `FMSG_MCP_OAUTH_RESOURCE_URL` |
 | `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |
-| `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>` |
+| `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>`. `caller` resolves them on the domain of the address the server acts as for each request, so `@mark@example.org` gets `@bob@example.org`; directory entries still take precedence |
 | `FMSG_DIRECTORY` | — | JSON file mapping short names to full addresses |
 | `FMSG_MCP_DOWNLOAD_DIR` | — | Enable `save_attachment` in stdio; folder for new files named from message ID and filename |
 | `FMSG_MCP_WAIT_MAX_SECONDS` | `230` | Cap on one `wait_for_message` call |

@@ -4,9 +4,12 @@
  * fmsg access paths, the irreversible-send rule, and the usage facts a model
  * otherwise gets wrong. Per-tool detail lives in the tool descriptions.
  */
+import { CALLER_DOMAIN, effectiveDefaultDomain } from "./address.js";
+
 export type InstructionsContext = {
   /** The address this server acts as, when already known (HTTP callers; stdio after a token exchange). */
   address?: string;
+  /** FMSG_DEFAULT_DOMAIN: a domain, or CALLER_DOMAIN for the caller's own domain. */
   defaultDomain?: string;
 };
 
@@ -14,9 +17,12 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
   const identity = ctx.address
     ? `you are acting as ${ctx.address}`
     : "call whoami to see which";
-  const shortNames = ctx.defaultDomain
-    ? `; short names resolve to @name@${ctx.defaultDomain}`
-    : "";
+  const domain = effectiveDefaultDomain(ctx.defaultDomain, ctx.address);
+  const shortNames = domain
+    ? `; short names resolve to @name@${domain}`
+    : ctx.defaultDomain === CALLER_DOMAIN
+      ? "; short names resolve to @name@<your domain>, the domain of the address you act as"
+      : "";
   return [
     `This server sends and receives fmsg messages as one fmsg address: ${identity}. ` +
       "Use its tools for everything fmsg: inbox, threads, attachments, sending, replying, reactions, " +

@@ -1,5 +1,6 @@
 import type { CallToolResult, McpServer, ServerContext, ToolAnnotations } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
+import type { AddressResolver } from "../address.js";
 import type { FmsgMessage, RecipientDelivery } from "../client/types.js";
 import type { Config } from "../config.js";
 import { type Caller, type CallerProvider, callerFor } from "../context.js";
@@ -83,6 +84,11 @@ export function deliveryOf(m: FmsgMessage): z.infer<typeof deliveryItem>[] {
 
 export function ok(text: string, structured: Record<string, unknown>): CallToolResult {
   return { content: [{ type: "text", text }], structuredContent: structured };
+}
+
+/** Short-name resolution for this caller: the configured directory and default domain. */
+export function resolverFor(deps: ToolDeps, caller: Caller): AddressResolver {
+  return { ...deps.config, callerAddress: caller.address };
 }
 
 /** Resolve the caller and run a tool body, turning any failure into an `isError` result. */
