@@ -23,8 +23,12 @@ describe("tools (stdio-shaped)", () => {
 
   it("returns server instructions covering precedence, sending and content handling", async () => {
     const text = h.client.getInstructions() ?? "";
-    expect(text).toContain("Other fmsg tools or local credentials may act as a different address or host");
-    expect(text).toContain("this server acts only as the address whoami reports");
+    expect(text).toContain("as one fmsg address, and only that one: call whoami to see which");
+    expect(text).toContain("other fmsg tools or local credentials may act as a different address");
+    expect(text).toContain("Terminal messages (such as reactions) cannot be replied or reacted to");
+    expect(text).toContain("then mark_read what you have handled");
+    expect(text).toContain("find its first message by topic in list_messages");
+    expect(text).not.toContain("not configured");
     expect(text).not.toContain("Do not use");
     expect(text).not.toContain("get_attachment_download_url");
     expect(text).toContain("cannot be edited or recalled");
@@ -504,7 +508,7 @@ describe("tools (stdio-shaped)", () => {
     ]);
     expect(text(result)).toContain("(code 200 accepted)");
     const description = (await h.client.listTools()).tools.find((t) => t.name === "delivery_status")!.description;
-    expect(description).toContain("200 means accepted");
+    expect(description).toContain("200 accepted");
     expect(description).not.toContain("non-zero");
   });
 

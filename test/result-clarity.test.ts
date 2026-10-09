@@ -38,7 +38,7 @@ describe("result clarity", () => {
     expect(r.next).toMatch(/Then call wait_for_message with after_id "\d+" to keep listening\.$/u);
     expect(text(result)).toContain(r.next);
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "wait_for_message")!;
-    expect(tool.description).toContain("a later wait will not return them");
+    expect(tool.description).toContain("after_id moves past them and pending_ids lists them");
   });
 
   it("get_thread says it returns the lineage only and keeps complete about the lineage", async () => {
@@ -53,7 +53,7 @@ describe("result clarity", () => {
     expect(t.next).toContain(LINEAGE_ONLY);
     expect(text(result)).toContain(LINEAGE_ONLY);
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "get_thread")!;
-    expect(tool.description).toContain("other replies in the same thread");
+    expect(tool.description).toContain("Other replies in the thread (other branches) may exist and are not included: list_messages and list_sent show them");
     expect(JSON.stringify(tool.outputSchema)).toContain("says nothing about other replies");
   });
 
@@ -128,20 +128,20 @@ describe("result clarity", () => {
     expect(walked.messages[0]).toMatchObject({ added: [CAROL] });
   });
 
-  it("labels size as the wire size and reports compression", async () => {
+  it("labels size as the stored size and reports compression", async () => {
     const body = "compressible ".repeat(40);
     const m = fake.seed({ from: BOB, to: [ALICE], topic: "zip", data: body, deflate: true, wireSize: 40 });
     const listed = structured<{ messages: Array<{ id: string; size: number; compressed: boolean }> }>(await call(h.client, "list_messages"));
     expect(listed.messages[0]).toMatchObject({ id: m.id, size: 40, compressed: true });
     const got = await call(h.client, "get_message", { id: m.id });
     expect(structured<{ message: { compressed: boolean }; body_bytes: number }>(got)).toMatchObject({ message: { compressed: true }, body_bytes: body.length });
-    expect(text(got)).toContain("40 bytes compressed");
+    expect(text(got)).toContain("40 bytes, sent compressed");
     const thread = structured<{ messages: Array<{ size: number; compressed: boolean; body_bytes: number }> }>(await call(h.client, "get_thread", { id: m.id }));
     expect(thread.messages[0]).toMatchObject({ size: 40, compressed: true, body_bytes: body.length });
     const plain = fake.seed({ from: BOB, to: [ALICE], data: "plain" });
     expect(structured<{ message: { compressed: boolean } }>(await call(h.client, "get_message", { id: plain.id })).message.compressed).toBe(false);
     const { tools } = await h.client.listTools();
-    expect(JSON.stringify(tools.find((t) => t.name === "list_messages")!.outputSchema)).toContain("bytes on the wire; the compressed length when compressed is true");
+    expect(JSON.stringify(tools.find((t) => t.name === "list_messages")!.outputSchema)).toContain("for a message you received with compressed true, the compressed wire length; your own sent messages store the uncompressed length");
   });
 
   it("download_attachment names the media type type and lists the attachments a message has", async () => {
@@ -169,7 +169,7 @@ describe("result clarity", () => {
   it("describes delivery_status for received messages and what via means", async () => {
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "delivery_status")!;
     expect(tool.description).toContain("for a received message");
-    expect(tool.description).toContain("add_to for recipients added later with the fmsg add-to mechanism");
+    expect(JSON.stringify(tool.outputSchema)).toContain("add_to for recipients added later with the fmsg add-to mechanism");
     const received = fake.seed({ from: BOB, to: [ALICE], data: "hi" });
     const status = await call(h.client, "delivery_status", { id: received.id });
     expect(structured<{ recipients: Array<{ addr: string }> }>(status).recipients.map((r) => r.addr)).toEqual([ALICE]);
@@ -195,6 +195,47 @@ describe("result clarity", () => {
     expect(structured<{ thread_topic: string }>(toRoot).thread_topic).toBe("the plan");
     expect(text(toRoot)).toContain(`in "the plan"`);
     expect(text(toRoot)).toContain(`for \`${BOB}\``);
-    expect(structured<{ thread_topic: string | null }>(await call(h.client, "reply", { id: leaf.id, body: "ok" })).thread_topic).toBeNull();
+    // A reply deeper in the thread looks the root's topic up.
+    const toLeaf = await call(h.client, "reply", { id: leaf.id, body: "ok" });
+    expect(structured<{ thread_topic: string | null }>(toLeaf).thread_topic).toBe("the plan");
+    expect(text(toLeaf)).toContain(`in "the plan"`);
+  });
+
+  it("names resolved short names and redactions as things to tell the user", async () => {
+    const sent = await call(h.client, "send_message", { to: ["bob", CAROL], topic: "hi", body: "id AKIAIOSFODNN7EXAMPLE" });
+    const r = structured<{ resolved: Array<{ input: string; address: string }>; warnings: string[] }>(sent);
+    expect(r.resolved).toEqual([{ input: "bob", address: BOB }]);
+    expect(r.warnings).toEqual([
+      "Tell the user 1 secret(s) (access_key_id) were replaced with placeholders before sending.",
+      `Short names were resolved: bob → ${BOB}.`,
+    ]);
+    expect(text(sent)).toContain(`Short names resolved: bob → \`${BOB}\`.`);
+    // Full addresses alone add nothing.
+    const plain = structured<Record<string, unknown>>(await call(h.client, "reply", { id: structured<{ id: string }>(sent).id, body: "ok", recipients: [BOB] }));
+    expect(plain.resolved).toBeUndefined();
+    expect(plain.warnings).toEqual([]);
+  });
+
+  it("rejects unknown arguments instead of ignoring them", async () => {
+    const result = await call(h.client, "list_messages", { unread: true });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/unread/u);
+  });
+
+  it("whoami gives the server version in its text", async () => {
+    expect(text(await call(h.client, "whoami"))).toMatch(/Server version \d+\.\d+\.\d+/u);
+  });
+
+  it("describes every input parameter", async () => {
+    const missing: string[] = [];
+    const walk = (schema: { properties?: Record<string, { description?: string; items?: unknown }> }, at: string) => {
+      for (const [name, property] of Object.entries(schema.properties ?? {})) {
+        if (!property.description && !["id", "ids", "limit", "offset"].includes(name)) missing.push(`${at}.${name}`);
+        const items = property.items as typeof schema | undefined;
+        if (items?.properties) walk(items, `${at}.${name}[]`);
+      }
+    };
+    for (const tool of (await h.client.listTools()).tools) walk(tool.inputSchema as Parameters<typeof walk>[0], tool.name);
+    expect(missing).toEqual([]);
   });
 });

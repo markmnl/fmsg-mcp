@@ -130,7 +130,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 |---|---|
 | `whoami` | The address this server acts as, the public API URL (when known), the transport (`stdio` or `http`, which is Streamable HTTP) and short-name defaults |
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
-| `list_messages` | Inbox, newest first, with previews, attachment types and wire `size` (`compressed` marks a deflated body); reactions hidden and never counted as unread unless `include_reactions` |
+| `list_messages` | Inbox, newest first, with previews, attachment types and `size` (`compressed` marks a body sent deflated); reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |
 | `get_message` | One message with headers, full text body, attachments, reactions and, for a reply, the root's `thread_topic` |
 | `get_thread` | The lineage from the thread root to a message (`scope: "lineage"`; other replies in the thread are not included), with gaps for messages you cannot see, per-message flags and added recipients, the root's `thread_topic`, and a `next` step that never suggests replying to a terminal or no-reply message |
@@ -152,8 +152,9 @@ structured result instead of the text. Attachment types come from the host when 
 otherwise from the filename extension, so every tool reports the same type, and every tool lists
 attachments in the same order (by filename). Addresses in the text are code spans, so they copy
 exactly (`@bob_mcp@example.com`, never with a Markdown escape); a backslash in an address is
-rejected. A message's `size` is the body's size on the wire: the compressed length when
-`compressed` is true.
+rejected. A message's `size` is the body size the host stores: for a received message with
+`compressed` true that is the compressed length, while your own sent messages keep the uncompressed
+length.
 
 ### Output schema compatibility
 
@@ -257,7 +258,8 @@ client.close();
 ```
 
 `send()` replaces selected credential patterns in the body and topic before creating the draft.
-Its result includes the replacement count (`redactions`) and transmitted `topic`. Attachments are
+Its result includes the replacement count (`redactions`), the kinds replaced (`redacted`, such as
+`github_token`) and transmitted `topic`. Attachments are
 unchanged. Use `streamAttachment()` to consume large files incrementally; consume or cancel its stream.
 
 Applications with their own authorization integration can pass a `TokenProvider` instead of an

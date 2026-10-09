@@ -256,7 +256,7 @@ describe("redactSecrets", () => {
 
   it.each(secrets)("redacts %s", (secret, placeholder) => {
     const result = redactSecrets(`config: ${secret} end`);
-    expect(result).toEqual({ text: `config: ${placeholder} end`, count: 1 });
+    expect(result).toEqual({ text: `config: ${placeholder} end`, count: 1, kinds: [placeholder.slice(10, -1).toLowerCase()] });
   });
 
   it("redacts a secret access key next to its label but keeps the label", () => {
@@ -265,7 +265,9 @@ describe("redactSecrets", () => {
       [`aws_secret_access_key = ${key}`, "aws_secret_access_key = [REDACTED_SECRET_ACCESS_KEY]"],
       [`AWS_SECRET_ACCESS_KEY=${key}`, "AWS_SECRET_ACCESS_KEY=[REDACTED_SECRET_ACCESS_KEY]"],
       [`{"SecretAccessKey": "${key}"}`, '{"SecretAccessKey": "[REDACTED_SECRET_ACCESS_KEY]"}'],
-    ]) expect(redactSecrets(input!)).toEqual({ text: output, count: 1 });
+      [`AWS secret access key: ${key}`, "AWS secret access key: [REDACTED_SECRET_ACCESS_KEY]"],
+      [`aws-secret-access-key=${key}`, "aws-secret-access-key=[REDACTED_SECRET_ACCESS_KEY]"],
+    ]) expect(redactSecrets(input!)).toEqual({ text: output, count: 1, kinds: ["secret_access_key"] });
     // The same 40 characters without a label are not distinctive enough to redact.
     expect(redactSecrets(`checksum ${key}`).count).toBe(0);
   });
@@ -281,7 +283,7 @@ describe("redactSecrets", () => {
       "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----",
       "@bob_mcp@example.org wrote: sk_ and rk_ prefixes, version 1.2.3, id 1234567890123456",
     ].join("\n");
-    expect(redactSecrets(ordinary)).toEqual({ text: ordinary, count: 0 });
+    expect(redactSecrets(ordinary)).toEqual({ text: ordinary, count: 0, kinds: [] });
   });
 
   it("reports redactions on sent messages", async () => {
@@ -290,7 +292,8 @@ describe("redactSecrets", () => {
     const h = await connectInMemory(fake);
     try {
       const result = await call(h.client, "send_message", { to: [BOB], topic: "keys", body: "id AKIAIOSFODNN7EXAMPLE and ghp_" + "a".repeat(36) });
-      expect(result.structuredContent).toMatchObject({ redactions: 2 });
+      expect(result.structuredContent).toMatchObject({ redactions: 2, redacted: ["access_key_id", "github_token"] });
+      expect(text(result)).toContain("2 secret(s) were redacted before sending (access_key_id, github_token).");
       const stored = [...fake.messages.values()].find((m) => m.topic === "keys")!;
       expect(stored.data.toString()).toBe("id [REDACTED_ACCESS_KEY_ID] and [REDACTED_GITHUB_TOKEN]");
     } finally {

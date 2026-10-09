@@ -12,7 +12,6 @@ import { registerSendTools } from "./tools/send.js";
 import { registerWaitTools } from "./tools/wait.js";
 import { registerSaveTool } from "./tools/save.js";
 import { registerDownloadTool } from "./tools/download.js";
-import { downloadBaseUrl } from "./download.js";
 import { VERSION } from "./version.js";
 
 export const SERVER_NAME = "fmsg";
@@ -32,7 +31,6 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   const instructions = buildInstructions({
     ...(options.address ? { address: options.address } : {}),
     ...(config.defaultDomain ? { defaultDomain: config.defaultDomain } : {}),
-    downloadUrls: downloadBaseUrl(config) !== undefined,
   });
   const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
   const deps: ToolDeps = { provider, config, ...(options.shutdown ? { shutdown: options.shutdown } : {}) };

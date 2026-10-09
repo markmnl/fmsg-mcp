@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- Tools reject unknown arguments instead of ignoring them, so a misspelled parameter (`unread` for
+  `unread_only`) fails with the name rather than returning a plausible wrong answer.
+- Server instructions define fmsg's terms (topics on the first message only, reactions, terminal,
+  no-reply, added recipients), give the inbox routine (list unread, read the thread, act or reply,
+  then `mark_read` what was handled) and say how to find a thread by topic. Cross-tool repeats, the
+  configuration-error sentence and the download-URL sentence are gone; some chat hosts do not load
+  server instructions, so nothing a tool needs lives only there.
+- Tool descriptions are shorter where results already carry the detail: `wait_for_message` is split
+  into when, loop, skipped and limits; `delivery_status`, `whoami` and the redaction sentences are
+  trimmed. `get_thread` says where other branches are; `add_recipients` says the added people can
+  read the message and its attachments. Every input parameter now has a description.
+- `send_message`, `reply` and `add_recipients` add `resolved` when short names were given (each
+  name and the address it became), and send results put things to tell the user (redacted secrets,
+  resolved short names) in `warnings`.
+- `whoami`'s text gives the server version (its structured result is unchanged since 0.2.5).
+- Secret access keys are redacted next to a label written in words or with hyphens ("AWS secret
+  access key: …", `aws-secret-access-key=…`) as well as the `aws_secret_access_key` forms.
+- `send_message` and `reply` results add `redacted`, the kinds of secret replaced (for example
+  `["access_key_id", "github_token"]`), and the text names them, so the sender need not fetch the
+  message to see what changed. `FmsgClient.send()` and `redactSecrets()` report them too.
+- `reply` results report the thread's `thread_topic` for a reply anywhere in the thread, not only
+  for a reply to the root (one thread lookup; null when the root is not visible).
+- `size` is described as the size the host stores: a receiving host stores the compressed wire
+  body, so a received message with `compressed` true reports the compressed length, while a
+  sender's copy of its own message keeps the uncompressed length. The text says "N bytes, sent
+  compressed".
+
 - `wait_for_message` no longer lets a model step past an unread message silently. Messages on other
   threads that arrive while a batch settles are not returned and `after_id` moves past them, as
   before; now `next` (and the text) names each one first ("Also new and not included here: message

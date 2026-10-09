@@ -38,28 +38,23 @@ export const registerWaitTools: Register = (server, deps) => {
     {
       title: "Wait for next fmsg message",
       description:
-        "Block until the next inbound message arrives (pushed over the fmsg host's WebSocket) and return it with its " +
-        "thread context so you can answer with reply. Use this when the user asks you to chat, converse, keep replying, " +
-        "auto-reply, or respond to the next message. Loop: wait → reply → wait again passing the after_id from the " +
-        "previous result. On status \"timeout\" simply call again with the same arguments and the returned after_id, " +
-        "which is never older than the newest inbox message when the call started, so nothing is replayed (\"0\" means " +
-        "the inbox was empty and is safe to pass). Messages arriving on the same thread within settle_seconds are " +
-        "batched into ONE result; reply once, to the newest (reply_target_id); the result's next field says what to do. " +
-        "Messages on other threads that arrive during that window are not returned: they are listed in " +
-        "pending_other_threads and pending_ids, after_id moves past them, and next says to read them with get_thread " +
-        "or get_message before waiting again (a later wait will not return them). " +
-        "Your own messages, reactions and no-reply messages never qualify; they are listed in skipped. Each call blocks " +
-        `at most timeout_seconds (max ${maxWait}); stop looping when the user interrupts or the limits they set are reached. ` +
-        "In chat hosts each wait is a model turn: tell the user you are listening and for how long rather than " +
-        "looping silently for long periods. Status \"interrupted\" means the server is restarting: call again with the " +
-        "returned after_id; no messages are lost.",
-      inputSchema: z.object({
+        "Block until the next inbound message arrives and return it with its thread context, so you can answer with reply.\n" +
+        "When: the user asks you to chat, keep replying or respond to the next message.\n" +
+        "Loop: wait → reply → wait again, passing each result's after_id. On \"timeout\" or \"interrupted\" (server " +
+        "restart) call again with the returned after_id; nothing is replayed or lost. Same-thread messages arriving " +
+        "within settle_seconds come as ONE result: reply once, to reply_target_id; next says what to do.\n" +
+        "Skipped: your own messages, reactions and no-reply messages (listed in skipped). Messages on other threads " +
+        "are not returned: after_id moves past them and pending_ids lists them; read them with get_thread before " +
+        "waiting again.\n" +
+        `Limits: each call blocks at most timeout_seconds (max ${maxWait}). In chat hosts each wait is a model turn: ` +
+        "tell the user you are listening and for how long, and stop when they interrupt or their limits are reached.",
+      inputSchema: z.strictObject({
         after_id: idSchema.optional().describe(
           "only messages with a greater id qualify; pass the after_id from the previous result. Omit on the first call to wait for messages arriving from now on",
         ),
         thread_of: idSchema.optional().describe("only accept messages in this message's thread"),
         from: z.string().optional().describe("only accept messages from this address or short name"),
-        timeout_seconds: z.number().int().min(1).max(maxWait).default(Math.min(90, maxWait)),
+        timeout_seconds: z.number().int().min(1).max(maxWait).default(Math.min(90, maxWait)).describe("longest this call blocks"),
         settle_seconds: z.number().int().min(0).max(30).default(3).describe("after the first message, keep collecting same-thread messages for this long"),
         include_thread: z.boolean().default(true).describe("include the assembled thread context of the newest message"),
       }),
