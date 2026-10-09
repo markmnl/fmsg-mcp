@@ -116,7 +116,7 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
     const client = new Client({ name: "e2e-http", version: "0.0.0" }, { versionNegotiation: { mode: "auto" } });
     await client.connect(transport);
     try {
-      expect(structured<{ address: string; transport: string }>(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
+      expect(structured<{ address: string; transport: string }>(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "streamable-http" });
       const bytes = Buffer.from([0, 255, 128, 13, 10, 42]);
       const sent = structured<{ id: string }>(await call(client, "send_message", { to: [BOB], topic: `binary download ${token}`, body: "binary attachment",
         attachments: [{ filename: "binary.bin", data_base64: bytes.toString("base64"), content_type: "application/octet-stream" }] }));

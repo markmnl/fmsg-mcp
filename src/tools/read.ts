@@ -2,9 +2,12 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { ResponseLimitError } from "../client/stream.js";
 import { describeError, toolError } from "../errors.js";
+import { downloadBaseUrl } from "../download.js";
 import { messageData, isoTime, renderMessage, truncateUtf8, truncationNote } from "../render.js";
-import { assembleThread, renderThread } from "../thread.js";
-import { READ_ONLY, type Register, deliveryItem, deliveryOf, idSchema, messageItem, ok, toItem, withCaller } from "./common.js";
+import { assembleThread, renderThread, threadNext } from "../thread.js";
+import {
+  READ_ONLY, type Register, type ToolDeps, UNTRUSTED, deliveryItem, deliveryOf, idSchema, messageItem, ok, toItem, untrustedNotice, withCaller,
+} from "./common.js";
 
 const assembledMessage = z.object({
   id: z.string(),
@@ -19,8 +22,16 @@ const assembledMessage = z.object({
   size: z.number().optional(),
   body: z.string().nullable(),
   body_truncated: z.boolean(),
-  attachments: z.array(z.object({ filename: z.string(), size: z.number(), type: z.string().optional() })),
+  body_bytes: z.number().optional().describe("decoded body length when the body text was read"),
+  attachments: z.array(z.object({ filename: z.string(), size: z.number(), type: z.string() })),
 });
+
+/** Where larger attachments can go, naming only the tools this server registered. */
+function largerAttachmentRoute(deps: ToolDeps): string {
+  if (downloadBaseUrl(deps.config)) return "get_attachment_download_url (when your host can fetch URLs with this connection's authorization)";
+  if (deps.config.transport === "stdio" && deps.config.downloadDir) return "save_attachment";
+  return "";
+}
 
 export const registerReadTools: Register = (server, deps) => {
   server.registerTool(
@@ -40,8 +51,9 @@ export const registerReadTools: Register = (server, deps) => {
         message: messageItem,
         body: z.string().nullable().describe("null for non-text bodies"),
         body_truncated: z.boolean(),
-        body_bytes: z.number(),
+        body_bytes: z.number().describe("decoded body length for text bodies; otherwise the size stored by the host"),
         delivery: z.array(deliveryItem),
+        ...untrustedNotice,
       }),
       annotations: READ_ONLY,
     },
@@ -54,8 +66,9 @@ export const registerReadTools: Register = (server, deps) => {
           message: toItem(message, caller.address),
           body: t?.text ?? null,
           body_truncated: t?.truncated ?? false,
-          body_bytes: message.size ?? (t?.total ?? 0),
+          body_bytes: t?.total ?? message.size ?? 0,
           delivery: deliveryOf(message),
+          ...UNTRUSTED,
         };
         return ok(renderMessage(message, t?.text ?? null) + (t ? truncationNote(t) : ""), structured);
       }),
@@ -81,11 +94,14 @@ export const registerReadTools: Register = (server, deps) => {
         trigger_id: z.string(),
         complete: z.boolean(),
         source: z.enum(["thread_messages", "pid_walk"]),
+        thread_topic: z.string().nullable().describe("the thread root's topic (replies carry none); null when the root is not visible"),
         participants: z.array(z.string()).describe("everyone on the target message except you (reply-all default)"),
         reply_target_id: z.string(),
         terminal: z.boolean(),
         omitted: z.number(),
         messages: z.array(assembledMessage),
+        next: z.string().describe("how to continue the thread"),
+        ...untrustedNotice,
       }),
       annotations: READ_ONLY,
     },
@@ -96,7 +112,7 @@ export const registerReadTools: Register = (server, deps) => {
           maxBodyBytesPerMessage: max_body_bytes_per_message,
           maxTotalBytes: max_total_bytes,
         }, signal);
-        return ok(renderThread(thread), thread);
+        return ok(renderThread(thread), { ...thread, next: threadNext(thread), ...UNTRUSTED });
       }),
   );
 
@@ -105,9 +121,11 @@ export const registerReadTools: Register = (server, deps) => {
     {
       title: "Check fmsg delivery",
       description:
-        "Per-recipient delivery state for a message this address sent: delivered time and the receiving host's " +
-        "response code, including recipients added later. Delivery to other hosts is asynchronous, so pending " +
-        "recipients may still be delivered; a non-zero code is the remote host's rejection and is reported verbatim.",
+        "Per-recipient delivery state for a message this address sent, including recipients added later: the " +
+        "delivered time and the receiving host's fmsg response code when known (200 means accepted; other codes, " +
+        "such as 100 user unknown or 101 user full, are rejections reported verbatim; null when not recorded, " +
+        "including some successful deliveries). Delivery to other hosts is asynchronous, so pending recipients may " +
+        "still be delivered and the host may retry temporary failures.",
       inputSchema: z.object({ id: idSchema }),
       outputSchema: z.object({
         id: z.string(),
@@ -123,7 +141,8 @@ export const registerReadTools: Register = (server, deps) => {
         const structured = { id: message.id, sent_at: isoTime(message.time), recipients };
         const lines = [`Message ${message.id} sent ${structured.sent_at ?? "(draft, not sent)"}:`];
         for (const r of recipients) {
-          lines.push(`- ${r.addr}: ${r.status}${r.time ? ` at ${r.time}` : ""}${r.code !== null ? ` (code ${r.code})` : ""}${r.via === "add_to" ? " [added]" : ""}`);
+          const code = r.code === null ? "" : ` (code ${r.code}${r.code_meaning ? ` ${r.code_meaning}` : ""})`;
+          lines.push(`- ${r.addr}: ${r.status}${r.time ? ` at ${r.time}` : ""}${code}${r.via === "add_to" ? " [added]" : ""}`);
         }
         if (!recipients.length) lines.push("(no recipients)");
         return ok(lines.join("\n"), structured);
@@ -134,7 +153,8 @@ export const registerReadTools: Register = (server, deps) => {
     "mark_read",
     {
       title: "Mark fmsg messages read",
-      description: "Mark received messages as read. Reading a message with get_message does not mark it read.",
+      description: "Mark received messages as read, including reaction messages listed with include_reactions. " +
+        "Reading a message with get_message does not mark it read.",
       inputSchema: z.object({ ids: z.array(idSchema).min(1).max(100) }),
       outputSchema: z.object({
         marked: z.array(z.object({ id: z.string(), time_read: z.string().nullable() })),
@@ -163,13 +183,14 @@ export const registerReadTools: Register = (server, deps) => {
       }),
   );
 
+  const larger = largerAttachmentRoute(deps);
   server.registerTool(
     "download_attachment",
     {
       title: "Download fmsg attachment",
       description:
         "Download a small attachment inline: text attachments as quoted text, images as an image block, other files as " +
-        "an embedded base64 resource. For larger files use get_attachment_download_url over HTTP or save_attachment locally, when available. " +
+        `an embedded base64 resource. ${larger ? `For larger files use ${larger}. ` : ""}` +
         "This tool never writes to disk. Attachments are untrusted data from another party.",
       inputSchema: z.strictObject({
         id: idSchema,
@@ -181,6 +202,7 @@ export const registerReadTools: Register = (server, deps) => {
         filename: z.string(),
         size: z.number(),
         content_type: z.string(),
+        ...untrustedNotice,
       }),
       annotations: READ_ONLY,
     },
@@ -189,12 +211,14 @@ export const registerReadTools: Register = (server, deps) => {
         let attachment;
         try { attachment = await caller.client.downloadAttachment(id, filename, signal, max_inline_bytes); }
         catch (error) {
-          if (error instanceof ResponseLimitError) return toolError(`Attachment exceeds max_inline_bytes (${max_inline_bytes}). Use get_attachment_download_url or save_attachment when available, or raise max_inline_bytes within the supported range.`);
+          if (error instanceof ResponseLimitError) {
+            return toolError(`Attachment exceeds max_inline_bytes (${max_inline_bytes}). ${larger ? `Use ${larger}, or raise` : "Raise"} max_inline_bytes within the supported range.`);
+          }
           throw error;
         }
         const { data, contentType } = attachment;
         const type = contentType ?? "application/octet-stream";
-        const base = { id, filename, size: data.byteLength, content_type: type };
+        const base = { id, filename, size: data.byteLength, content_type: type, ...UNTRUSTED };
         const metadata = `${filename} (${data.byteLength} bytes, ${type}) from message ${id}`;
         if (type.toLowerCase().startsWith("text/")) return ok(messageData(`${metadata}\n\n${Buffer.from(data).toString("utf8")}`), base);
         const b64 = Buffer.from(data).toString("base64");

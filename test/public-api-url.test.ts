@@ -70,9 +70,9 @@ describe("whoami api_url", () => {
     const h = await connectHttpShaped(fake, new StaticCallerProvider(new FmsgClient(fake.baseUrl, "fmsgk_alice_secret")), undefined);
     try {
       const result = await call(h.client, "whoami");
-      expect(structured(result)).toMatchObject({ address: ALICE, api_url: null, transport: "http" });
+      expect(structured(result)).toMatchObject({ address: ALICE, api_url: null, transport: "streamable-http" });
       expect(text(result)).not.toContain(fake.baseUrl);
-      expect(text(result)).toContain(`You are **${ALICE}** (http).`);
+      expect(text(result)).toContain(`You are **${ALICE}**, connected over Streamable HTTP.`);
     } finally { await h.close(); }
   });
 
@@ -82,7 +82,7 @@ describe("whoami api_url", () => {
     try {
       const result = await call(h.client, "whoami");
       expect(structured(result)).toMatchObject({ address: ALICE, api_url: "https://api.example.com" });
-      expect(text(result)).toContain("on https://api.example.com (http)");
+      expect(text(result)).toContain("on https://api.example.com, connected over Streamable HTTP");
       expect(text(result)).not.toContain(fake.baseUrl);
       expect(fake.requests.length).toBeGreaterThan(0);
     } finally { await h.close(); }

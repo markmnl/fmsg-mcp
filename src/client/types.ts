@@ -4,7 +4,10 @@ export type RecipientDelivery = {
   addr: string;
   /** RFC3339 UTC; null until delivered. */
   time_delivered: string | null;
-  /** The receiving host's response code for the last delivery attempt; null if none yet. */
+  /**
+   * The receiving host's per-recipient fmsg response code for the last attempt when recorded
+   * (200 accepted; 100–105 recipient rejections; message-level codes such as 1–11); null when not recorded.
+   */
   response_code: number | null;
 };
 
@@ -45,7 +48,9 @@ export type FmsgMessage = {
   time?: number | null;
   topic?: string;
   type?: string;
+  /** Body size on the wire: the compressed size when `deflate` is true. */
   size?: number;
+  /** Up to the host's preview limit of the decoded body; complete only when `deflate` is false and it covers `size`. */
   short_text?: string;
   read?: boolean;
   time_read?: number | null;
@@ -86,6 +91,7 @@ export type ThreadMessage = {
   topic?: string;
   type?: string;
   size?: number;
+  deflate?: boolean;
   message_sha256?: string;
   body?: ThreadBody;
   attachments?: ThreadAttachment[];

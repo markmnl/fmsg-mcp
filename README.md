@@ -119,32 +119,37 @@ For loopback binds, loopback browser origins on any port work by default, includ
 at `http://localhost:6274`. Setting an explicit origin list replaces that loopback default.
 Allowed preflights need no credentials; actual MCP requests always require authentication.
 `wait_for_message` holds a request open for up to
-`FMSG_MCP_WAIT_MAX_SECONDS` (230), so give the proxy an idle timeout of at least 240 s.
+`FMSG_MCP_WAIT_MAX_SECONDS` (230), so give the proxy an idle timeout of at least 240 s. On SIGTERM
+the server ends open waits with an `interrupted` result that clients resume from, gives other
+requests 5 seconds to finish, and exits, well within a service manager's stop timeout.
 See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback deployment with Caddy.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `whoami` | The address this server acts as, the public API URL (when known) and token expiry |
+| `whoami` | The address this server acts as, the public API URL (when known), the transport (`stdio` or `streamable-http`) and short-name defaults |
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
-| `list_messages` | Inbox, newest first, with previews; reactions hidden; optional unread filter |
+| `list_messages` | Inbox, newest first, with previews and attachment types; reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |
 | `get_message` | One message with headers, full text body, attachments and reactions |
-| `get_thread` | The lineage from the thread root to a message, with gaps for messages you cannot see |
+| `get_thread` | The lineage from the thread root to a message, with gaps for messages you cannot see, and the root's `thread_topic` |
 | `send_message` | Start a new thread; sends immediately (fmsg messages are immutable) |
 | `reply` | Reply into a thread; reply-all by default, refuses terminal and no-reply parents |
-| `add_recipients` | Add recipients to a sent message |
+| `add_recipients` | Add `recipients` to a sent message (`add_to` is a deprecated alias) |
 | `react` | Set or clear your emoji reaction |
 | `mark_read` | Mark received messages read |
 | `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources |
-| `get_attachment_download_url` | Get a credential-free URL and resource link for an authenticated binary download; HTTP only, requires a public MCP URL |
+| `get_attachment_download_url` | Get a credential-free URL and resource link for an authenticated binary download; HTTP only, requires a public MCP URL; hosts that cannot send the connection's Authorization header use `download_attachment` |
 | `save_attachment` | Stream an attachment to the configured local folder; stdio only, enabled by `FMSG_MCP_DOWNLOAD_DIR` |
-| `delivery_status` | Per-recipient delivery times and host response codes |
-| `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context |
+| `delivery_status` | Per-recipient delivery times and fmsg response codes (`200` accepted; `null` when not recorded) |
+| `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context, skipped reactions and a `next` step |
 
 Every tool returns readable Markdown plus `structuredContent`. Ids are decimal strings. Message
-bodies are labelled as data from other parties, not instructions.
+bodies are labelled as data from other parties, not instructions; structured results that carry
+other parties' words repeat that in `untrusted_content_notice`, since some hosts show the
+structured result instead of the text. Attachment types come from the host when it recorded one,
+otherwise from the filename extension, so every tool reports the same type.
 
 Resources `fmsg://message/{id}` and `fmsg://thread/{id}` expose the same content to hosts that
 attach resources; prompts `chat` and `reply` script the wait → reply loop and a guided reply.
@@ -181,8 +186,9 @@ portable names; use the returned `saved_to` path. Streaming downloads can run lo
 while making progress; a 60-second idle timeout detects stalled transfers.
 
 Inline downloads default to 256 KiB to keep file content manageable for the model. Use
-`save_attachment` for larger local files, or raise `max_inline_bytes` explicitly when your AI host
-can handle more inline content.
+`save_attachment` for larger local files (stdio), `get_attachment_download_url` for remote ones
+(HTTP), or raise `max_inline_bytes` explicitly when your AI host can handle more inline content.
+Tool descriptions name only the tools the running server registered.
 
 For remote file downloads, call `get_attachment_download_url` with the message ID and filename.
 It returns metadata and an HTTPS `resource_link`; your AI host downloads the original bytes using

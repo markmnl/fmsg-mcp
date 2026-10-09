@@ -1,7 +1,9 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { Client } from "@modelcontextprotocol/client";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
 import { ALICE, BOB, call, structured, text } from "./helpers.js";
@@ -70,5 +72,30 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
       expect(text(result)).toContain("restart");
       expect(text(result)).not.toContain("not instructions");
     } finally { await unconfigured.close(); }
+  });
+
+  it("exits promptly on SIGTERM over HTTP, ending an in-flight wait with an interrupted result", async () => {
+    const child = spawn(process.execPath, [entry, "--http", "127.0.0.1:0"], {
+      env: { ...process.env, FMSG_API_URL: fake.baseUrl } as Record<string, string>,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    try {
+      let log = "";
+      child.stderr!.on("data", (chunk) => { log += String(chunk); });
+      await vi.waitFor(() => expect(log).toMatch(/serving Streamable HTTP at (http:\/\/\S+\/mcp)/u), { timeout: 5000 });
+      const url = /serving Streamable HTTP at (http:\/\/\S+\/mcp)/u.exec(log)![1]!;
+      const remote = new Client({ name: "sigterm-test", version: "0.0.0" }, { versionNegotiation: { mode: "auto" } });
+      await remote.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: "Bearer fmsgk_alice_secret" } } }));
+      const seen = fake.seed({ from: BOB, to: [ALICE], data: "already seen" });
+      const waiting = call(remote, "wait_for_message", { after_id: seen.id, timeout_seconds: 110 });
+      await vi.waitFor(() => expect(fake.connectedSockets(ALICE)).toBe(1), { timeout: 5000 });
+      const started = Date.now();
+      child.kill("SIGTERM");
+      expect(structured<{ status: string; after_id: string }>(await waiting)).toMatchObject({ status: "interrupted", after_id: seen.id });
+      const [code] = await once(child, "exit");
+      expect(code).toBe(0);
+      expect(Date.now() - started).toBeLessThan(3000);
+      await remote.close().catch(() => undefined);
+    } finally { child.kill("SIGKILL"); }
   });
 });

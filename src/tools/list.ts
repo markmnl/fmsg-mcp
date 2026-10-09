@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import { messageData, messageLine } from "../render.js";
-import { READ_ONLY, type Register, deliveryItem, deliveryOf, messageItem, ok, toItem, withCaller } from "./common.js";
+import { READ_ONLY, type Register, UNTRUSTED, deliveryItem, deliveryOf, messageItem, ok, toItem, untrustedNotice, withCaller } from "./common.js";
 
 const pageInput = {
   limit: z.number().int().min(1).max(100).default(20).describe("page size (host maximum 100)"),
@@ -15,17 +15,21 @@ export const registerListTools: Register = (server, deps) => {
       title: "List inbox",
       description:
         "List messages received by this address, newest first. Each item carries the id, sender, recipients, topic, " +
-        "time, read state, flags, size, attachment names and a short preview. Reaction messages are hidden unless " +
-        "include_reactions is true. Use get_message for a full body and get_thread for the conversation around a message.",
+        "time, read state, flags, size, attachment names and types, and a short preview. Reaction messages are hidden " +
+        "unless include_reactions is true, and hidden reactions never count as unread; listed reactions have their own " +
+        "read state (mark_read accepts them) and carry the emoji in reaction. Topics are set only on a thread's first " +
+        "message; get_thread reports a reply's thread_topic. Use get_message for a full body and get_thread for the " +
+        "conversation around a message.",
       inputSchema: z.object({
         ...pageInput,
-        unread_only: z.boolean().default(false).describe("keep only unread messages from the fetched page"),
+        unread_only: z.boolean().default(false).describe("keep only unread messages from the fetched page (reactions only with include_reactions)"),
       }),
       outputSchema: z.object({
         messages: z.array(messageItem),
         count: z.number(),
         offset: z.number(),
         next_offset: z.number().nullable().describe("offset for the next page, or null when this page was short"),
+        ...untrustedNotice,
       }),
       annotations: READ_ONLY,
     },
@@ -38,6 +42,7 @@ export const registerListTools: Register = (server, deps) => {
           count: shown.length,
           offset,
           next_offset: page.length === limit ? offset + limit : null,
+          ...UNTRUSTED,
         };
         const text = shown.length
           ? `${shown.length} message${shown.length === 1 ? "" : "s"} (offset ${offset}):\n${shown.map((m) => messageLine(m, caller.address)).join("\n")}`
@@ -59,6 +64,7 @@ export const registerListTools: Register = (server, deps) => {
         count: z.number(),
         offset: z.number(),
         next_offset: z.number().nullable(),
+        ...untrustedNotice,
       }),
       annotations: READ_ONLY,
     },
@@ -71,6 +77,7 @@ export const registerListTools: Register = (server, deps) => {
           count: shown.length,
           offset,
           next_offset: page.length === limit ? offset + limit : null,
+          ...UNTRUSTED,
         };
         const text = shown.length
           ? `${shown.length} sent message${shown.length === 1 ? "" : "s"} (offset ${offset}):\n${shown

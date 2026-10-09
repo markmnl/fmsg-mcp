@@ -1,7 +1,7 @@
 import { sameAddress } from "./address.js";
 import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import type { FmsgMessage, Thread, ThreadMessage } from "./client/types.js";
-import { DATA_NOT_INSTRUCTIONS, fence, headerValue, isoTime, participantsOf, truncateUtf8, truncationNote } from "./render.js";
+import { DATA_NOT_INSTRUCTIONS, attachmentType, fence, headerValue, isoTime, participantsOf, truncateUtf8, truncationNote } from "./render.js";
 
 export type ThreadCaps = {
   maxMessages: number;
@@ -22,7 +22,9 @@ export type AssembledMessage = {
   size?: number;
   body: string | null;
   body_truncated: boolean;
-  attachments: Array<{ filename: string; size: number; type?: string }>;
+  /** Decoded body length when the body text was read; `size` is the wire size. */
+  body_bytes?: number;
+  attachments: Array<{ filename: string; size: number; type: string }>;
 };
 
 export type AssembledThread = {
@@ -30,6 +32,8 @@ export type AssembledThread = {
   trigger_id: string;
   complete: boolean;
   source: "thread_messages" | "pid_walk";
+  /** The root's topic (fmsg topics live only on the root); null when the root is not visible or not reached. */
+  thread_topic: string | null;
   participants: string[];
   reply_target_id: string;
   terminal: boolean;
@@ -47,8 +51,9 @@ async function fromThreadMessages(
   thread: Thread,
   caps: ThreadCaps,
   signal?: AbortSignal,
-): Promise<{ messages: AssembledMessage[]; omitted: number }> {
+): Promise<{ messages: AssembledMessage[]; omitted: number; topic: string | null }> {
   const all = nonReactions(thread.messages);
+  const root = all[0];
   const omitted = Math.max(0, all.length - caps.maxMessages);
   const kept = omitted > 0 ? all.slice(all.length - caps.maxMessages) : all;
   let budget = caps.maxTotalBytes;
@@ -56,6 +61,7 @@ async function fromThreadMessages(
   for (const m of kept) {
     let body: string | null = null;
     let truncated = false;
+    let bodyBytes: number | undefined;
     if (m.visible && m.body) {
       let text: string | null = null;
       if (typeof m.body.text === "string") text = m.body.text;
@@ -68,6 +74,7 @@ async function fromThreadMessages(
         const t = truncateUtf8(text, limit);
         body = t.text;
         truncated = t.truncated;
+        bodyBytes = t.total;
         budget -= t.shown;
       }
     }
@@ -84,10 +91,11 @@ async function fromThreadMessages(
       ...(typeof m.size === "number" ? { size: m.size } : {}),
       body,
       body_truncated: truncated,
-      attachments: (m.attachments ?? []).map((a) => ({ filename: a.filename, size: a.size, type: a.type })),
+      ...(bodyBytes !== undefined ? { body_bytes: bodyBytes } : {}),
+      attachments: (m.attachments ?? []).map((a) => ({ filename: a.filename, size: a.size, type: attachmentType(a.filename, a.type) })),
     });
   }
-  return { messages: out, omitted };
+  return { messages: out, omitted, topic: root?.visible && root.id === thread.root_id ? (root.topic ?? "") : null };
 }
 
 async function fromPidWalk(
@@ -95,7 +103,7 @@ async function fromPidWalk(
   triggerId: string,
   caps: ThreadCaps,
   signal?: AbortSignal,
-): Promise<{ root_id: string; complete: boolean; messages: AssembledMessage[]; last: FmsgMessage }> {
+): Promise<{ root_id: string; complete: boolean; messages: AssembledMessage[]; last: FmsgMessage; topic: string | null }> {
   const chain: FmsgMessage[] = [];
   let id: string | null = triggerId;
   let complete = true;
@@ -120,11 +128,13 @@ async function fromPidWalk(
   for (const m of chain) {
     let body: string | null = null;
     let truncated = false;
+    let bodyBytes: number | undefined;
     const text = await client.getText(m, signal);
     if (text !== null) {
       const t = truncateUtf8(text, Math.max(0, Math.min(caps.maxBodyBytesPerMessage, budget)));
       body = t.text;
       truncated = t.truncated;
+      bodyBytes = t.total;
       budget -= t.shown;
     }
     messages.push({
@@ -140,11 +150,13 @@ async function fromPidWalk(
       ...(typeof m.size === "number" ? { size: m.size } : {}),
       body,
       body_truncated: truncated,
-      attachments: (m.attachments ?? []).map((a) => ({ filename: a.filename, size: a.size })),
+      ...(bodyBytes !== undefined ? { body_bytes: bodyBytes } : {}),
+      attachments: (m.attachments ?? []).map((a) => ({ filename: a.filename, size: a.size, type: attachmentType(a.filename) })),
     });
   }
   const last = chain[chain.length - 1]!;
-  return { root_id: chain[0]!.id, complete, messages, last };
+  const root = chain[0]!;
+  return { root_id: root.id, complete, messages, last, topic: root.pid ? null : (root.topic ?? "") };
 }
 
 /**
@@ -162,12 +174,13 @@ export async function assembleThread(
   const participants = participantsOf(trigger).filter((a) => !sameAddress(a, self));
   try {
     const thread = await client.getThreadMessages(triggerId, signal);
-    const { messages, omitted } = await fromThreadMessages(client, thread, caps, signal);
+    const { messages, omitted, topic } = await fromThreadMessages(client, thread, caps, signal);
     return {
       root_id: thread.root_id,
       trigger_id: thread.trigger_id,
       complete: thread.complete && omitted === 0,
       source: "thread_messages",
+      thread_topic: topic,
       participants,
       reply_target_id: trigger.id,
       terminal: trigger.terminal === true,
@@ -184,6 +197,7 @@ export async function assembleThread(
       trigger_id: triggerId,
       complete: walk.complete,
       source: "pid_walk",
+      thread_topic: walk.topic,
       participants,
       reply_target_id: trigger.id,
       terminal: trigger.terminal === true,
@@ -196,9 +210,8 @@ export async function assembleThread(
 export function renderThread(thread: AssembledThread): string {
   const lines: string[] = [];
   const guidance: string[] = [];
-  const root = thread.messages[0];
   lines.push(`**fmsg thread** root ${thread.root_id} · ${thread.messages.length} message${thread.messages.length === 1 ? "" : "s"} on the lineage to ${thread.trigger_id}${thread.complete ? "" : " (incomplete)"}`);
-  if (root?.topic) lines.push(`Topic: ${headerValue(root.topic)}`);
+  if (thread.thread_topic) lines.push(`Topic: ${headerValue(thread.thread_topic)}`);
   if (thread.omitted > 0) lines.push(`(${thread.omitted} earlier message${thread.omitted === 1 ? "" : "s"} omitted)`);
   lines.push(`Participants (reply-all default): ${thread.participants.map(headerValue).join(", ") || "(none)"}`);
   lines.push("");
@@ -209,20 +222,23 @@ export function renderThread(thread: AssembledThread): string {
       continue;
     }
     lines.push(`--- message ${m.id} from ${headerValue(m.from ?? "?")} · ${m.time ?? "draft"}${m.pid ? ` · reply to ${m.pid}` : ""} ---`);
-    if (m.attachments.length) lines.push(`attachments: ${m.attachments.map((a) => `${headerValue(a.filename)} (${a.size} bytes)`).join(", ")}`);
+    if (m.attachments.length) lines.push(`attachments: ${m.attachments.map((a) => `${headerValue(a.filename)} (${a.size} bytes, ${headerValue(a.type)})`).join(", ")}`);
     if (m.body === null) {
       lines.push(`[non-text body: ${headerValue(m.type ?? "?")}, ${m.size ?? 0} bytes]`);
       guidance.push(`Use get_message / download_attachment for message ${m.id}.`);
     }
     else {
       lines.push(fence(m.body));
-      if (m.body_truncated) guidance.push(truncationNote({ text: "", truncated: true, shown: Buffer.byteLength(m.body), total: m.size ?? 0 }, `call get_message ${m.id} for the full body`).trim());
+      if (m.body_truncated) guidance.push(truncationNote({ text: "", truncated: true, shown: Buffer.byteLength(m.body), total: m.body_bytes ?? m.size ?? 0 }, `call get_message ${m.id} for the full body`).trim());
     }
   }
-  guidance.push(
-    thread.terminal
-      ? `Message ${thread.reply_target_id} is terminal: it cannot be replied to.`
-      : `To continue this thread, reply to message ${thread.reply_target_id} (the reply tool).`,
-  );
+  guidance.push(threadNext(thread));
   return [DATA_NOT_INSTRUCTIONS, lines.join("\n"), "End of message data.", ...guidance].join("\n\n");
+}
+
+/** Server guidance for continuing a thread; also returned as a structured `next` field. */
+export function threadNext(thread: Pick<AssembledThread, "terminal" | "reply_target_id">): string {
+  return thread.terminal
+    ? `Message ${thread.reply_target_id} is terminal: it cannot be replied to.`
+    : `To continue this thread, reply to message ${thread.reply_target_id} (the reply tool).`;
 }

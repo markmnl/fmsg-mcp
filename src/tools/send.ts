@@ -2,8 +2,8 @@ import * as z from "zod/v4";
 import { resolveAddresses, sameAddress } from "../address.js";
 import type { OutboundAttachment } from "../client/types.js";
 import { toolError } from "../errors.js";
-import { isoTime, participantsOf } from "../render.js";
-import { READ_ONLY, SENDS, type Register, idSchema, ok, resolverFor, withCaller } from "./common.js";
+import { attachmentType, isoTime, participantsOf } from "../render.js";
+import { SENDS, type Register, attachmentItem, idSchema, ok, resolverFor, withCaller } from "./common.js";
 
 const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
@@ -12,6 +12,11 @@ const attachmentInput = z.object({
   data_base64: z.string().min(1),
   content_type: z.string().optional(),
 });
+
+/** Sent attachments with the type each was given, or the one its filename implies. */
+function sentAttachments(sent: Array<{ filename: string; size: number }>, outbound: OutboundAttachment[]) {
+  return sent.map((a, i) => ({ ...a, type: attachmentType(a.filename, outbound[i]?.contentType) }));
+}
 
 function decodeAttachments(items: z.infer<typeof attachmentInput>[] | undefined): OutboundAttachment[] {
   return (items ?? []).map((a) => {
@@ -28,7 +33,7 @@ const sentOutput = z.object({
   to: z.array(z.string()),
   topic: z.string(),
   parent_id: z.string().nullable(),
-  attachments: z.array(z.object({ filename: z.string(), size: z.number() })),
+  attachments: z.array(attachmentItem),
   redactions: z.number().describe("secrets replaced with placeholders before sending"),
   warnings: z.array(z.string()),
 });
@@ -58,6 +63,7 @@ export const registerSendTools: Register = (server, deps) => {
     async ({ to, topic, body, type, important, no_reply, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const recipients = resolveAddresses(to, resolverFor(deps, caller));
+        const outbound = decodeAttachments(attachments);
         const sent = await caller.client.send({
           to: recipients,
           topic,
@@ -65,7 +71,7 @@ export const registerSendTools: Register = (server, deps) => {
           type,
           important,
           noReply: no_reply,
-          attachments: decodeAttachments(attachments),
+          attachments: outbound,
           signal,
         });
         const structured = {
@@ -75,7 +81,7 @@ export const registerSendTools: Register = (server, deps) => {
           to: recipients,
           topic: sent.topic,
           parent_id: null,
-          attachments: sent.attachments,
+          attachments: sentAttachments(sent.attachments, outbound),
           redactions: sent.redactions,
           warnings: [] as string[],
         };
@@ -120,6 +126,7 @@ export const registerSendTools: Register = (server, deps) => {
           ? resolveAddresses(recipients, resolverFor(deps, caller))
           : participantsOf(parent).filter((a) => !sameAddress(a, caller.address));
         if (to.length === 0) return toolError(`message ${id} has no other participants to reply to; pass recipients`);
+        const outbound = decodeAttachments(attachments);
         const sent = await caller.client.send({
           to,
           pid: parent.id,
@@ -127,7 +134,7 @@ export const registerSendTools: Register = (server, deps) => {
           type,
           important,
           noReply: no_reply,
-          attachments: decodeAttachments(attachments),
+          attachments: outbound,
           signal,
         });
         const structured = {
@@ -137,7 +144,7 @@ export const registerSendTools: Register = (server, deps) => {
           to,
           topic: "",
           parent_id: parent.id,
-          attachments: sent.attachments,
+          attachments: sentAttachments(sent.attachments, outbound),
           redactions: sent.redactions,
           warnings,
         };
@@ -155,18 +162,26 @@ export const registerSendTools: Register = (server, deps) => {
         "Add recipients to a message that was already sent (one you sent or received as a primary recipient). " +
         "They receive the message and become participants of its thread. This cannot be undone. Fails on terminal messages.",
       inputSchema: z.object({
-        id: idSchema,
-        add_to: z.array(z.string()).min(1).describe("addresses or short names to add"),
+        id: idSchema.describe("the sent message to add recipients to"),
+        recipients: z.array(z.string()).min(1).optional().describe("addresses or short names to add"),
+        add_to: z.array(z.string()).min(1).optional().describe("deprecated alias of recipients; pass one or the other"),
       }),
-      outputSchema: z.object({ id: z.string(), added: z.number(), add_to: z.array(z.string()) }),
+      outputSchema: z.object({
+        id: z.string(),
+        added: z.number(),
+        recipients: z.array(z.string()),
+        add_to: z.array(z.string()).describe("deprecated copy of recipients"),
+      }),
       annotations: { ...SENDS, idempotentHint: true },
     },
-    async ({ id, add_to }, ctx) =>
-      withCaller(deps, ctx, async (caller, signal) => {
-        const addresses = resolveAddresses(add_to, resolverFor(deps, caller));
+    async ({ id, recipients, add_to }, ctx) => {
+      if ((recipients === undefined) === (add_to === undefined)) return toolError("pass recipients: the addresses to add (add_to is its deprecated alias; not both)");
+      return withCaller(deps, ctx, async (caller, signal) => {
+        const addresses = resolveAddresses((recipients ?? add_to)!, resolverFor(deps, caller));
         const result = await caller.client.addRecipients(id, addresses, signal);
-        return ok(`Added ${result.added} recipient(s) to message ${id}: ${addresses.join(", ")}`, { ...result, add_to: addresses });
-      }),
+        return ok(`Added ${result.added} recipient(s) to message ${id}: ${addresses.join(", ")}`, { ...result, recipients: addresses, add_to: addresses });
+      });
+    },
   );
 
   server.registerTool(
@@ -191,7 +206,4 @@ export const registerSendTools: Register = (server, deps) => {
         return ok(value ? `Reacted ${value} to message ${id}` : `Cleared your reaction on message ${id}`, structured);
       }),
   );
-
-  // Kept read-only tools' annotation import in use for symmetry with other files.
-  void READ_ONLY;
 };

@@ -160,7 +160,8 @@ describe("waitForMessage", () => {
     const r = await p;
     expect(r.status).toBe("message");
     expect(r.messages.map((m) => m.id)).toEqual([inThread.id]);
-    expect(r.skipped).toEqual([{ id: other.id, reason: "other_thread" }]);
+    expect(r.skipped).toEqual([{ id: other.id, reason: "other_thread", from: CAROL }]);
+    expect(r.thread_topic).toBe("A");
     expect(r.unclassified).toEqual([]);
     expect(r.after_id).toBe(inThread.id);
   });
@@ -188,6 +189,18 @@ describe("waitForMessage", () => {
     expect(r2.messages.map((m) => m.id)).toEqual([ghost.id, later.id]);
     expect(r2.after_id).toBe(later.id);
     expect(r2.unclassified).toEqual([]);
+  });
+
+  it("ends with status interrupted and the caller's cursor on server shutdown", async () => {
+    const seen = fake.seed({ from: BOB, to: [ALICE], data: "seen" });
+    const shutdown = new AbortController();
+    const p = waitForMessage(client, ALICE, opts({ afterId: seen.id, timeoutMs: 10_000, interrupt: shutdown.signal }));
+    await vi.waitFor(() => expect(fake.connectedSockets(ALICE)).toBe(1));
+    shutdown.abort();
+    const r = await p;
+    expect(r).toMatchObject({ status: "interrupted", after_id: seen.id, messages: [] });
+    expect(r.note).toContain("server is restarting");
+    expect((await waitForMessage(client, ALICE, opts({ afterId: seen.id, interrupt: shutdown.signal }))).status).toBe("interrupted");
   });
 
   it("falls back to polling when the socket cannot open", async () => {
