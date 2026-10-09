@@ -7,6 +7,8 @@ export type OAuthConfig = {
   clientSecret: string;
   exchangeAudience: string;
   addressClaim: string;
+  /** Combined mode: `fmsgk_` bearer keys use API-key authentication on the same endpoint. */
+  acceptApiKeys?: boolean;
 };
 
 /** Preserve exact issuer/resource identifiers while checking their transport and shape. */
@@ -22,10 +24,12 @@ export function oauthUrl(value: string, label: string, allowQuery = false): stri
 
 export function loadOAuthConfig(env: NodeJS.ProcessEnv, transport: string): OAuthConfig | undefined {
   const mode = env.FMSG_MCP_AUTH_MODE ?? "api-key";
-  if (mode !== "api-key" && mode !== "oauth") throw new Error("FMSG_MCP_AUTH_MODE must be api-key or oauth");
+  if (mode !== "api-key" && mode !== "oauth" && mode !== "oauth+api-key") {
+    throw new Error("FMSG_MCP_AUTH_MODE must be api-key, oauth or oauth+api-key");
+  }
   const configured = Object.keys(env).some(key => key.startsWith("FMSG_MCP_OAUTH_") && env[key]);
   if (mode === "api-key") {
-    if (configured) throw new Error("Set FMSG_MCP_AUTH_MODE=oauth to use FMSG_MCP_OAUTH_* settings");
+    if (configured) throw new Error("Set FMSG_MCP_AUTH_MODE=oauth or oauth+api-key to use FMSG_MCP_OAUTH_* settings");
     return undefined;
   }
   if (transport !== "http") throw new Error("OAuth mode requires HTTP; use API-key mode for stdio");
@@ -43,5 +47,6 @@ export function loadOAuthConfig(env: NodeJS.ProcessEnv, transport: string): OAut
     resourceUrl, issuerUrl, exchangeAudience,
     clientId: required("CLIENT_ID"), clientSecret: required("CLIENT_SECRET"),
     addressClaim: env.FMSG_MCP_OAUTH_ADDRESS_CLAIM?.trim() || "sub",
+    ...(mode === "oauth+api-key" ? { acceptApiKeys: true } : {}),
   };
 }

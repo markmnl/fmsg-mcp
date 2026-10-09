@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add HTTP `FMSG_MCP_AUTH_MODE=oauth+api-key`, serving OAuth and API-key callers on one endpoint.
+  `Bearer fmsgk_...` requests use API-key authentication; all others, including unauthenticated
+  requests, use OAuth with its discovery challenge and scope checks. Providers and caches stay
+  separate. Rejected API keys are also challenged with the protected-resource metadata URL.
+  `api-key` and `oauth` modes are unchanged. `HttpServerHandle.providers` exposes both providers.
 - Add optional `FMSG_API_PUBLIC_URL`: the Web API URL `whoami` reports to users, while requests
   keep using `FMSG_API_URL`. It defaults to `FMSG_API_URL`, except that HTTP mode no longer
   reports a cleartext (internal or loopback) upstream URL. `whoami`'s `api_url` is therefore

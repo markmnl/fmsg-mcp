@@ -16,7 +16,7 @@ import { MESSAGING_SCOPES, READ_SCOPE, requestScopes } from "./oauth/scopes.js";
 import { DOWNLOAD_PATH, downloadBaseUrl, downloadHeaders, parseDownloadPath } from "./download.js";
 import { FmsgHttpError } from "./client/errors.js";
 import { describeError } from "./errors.js";
-import type { Caller } from "./context.js";
+import type { Caller, CallerProvider } from "./context.js";
 import { VERSION } from "./version.js";
 import { safeErrorMessage } from "./client/redact.js";
 import { isLoopbackHost, normalizeOrigin } from "./client/url.js";
@@ -25,6 +25,8 @@ export const MCP_PATH = "/mcp";
 
 const CORS_METHODS = ["POST", "GET", "DELETE"];
 const CORS_HEADERS = ["authorization", "content-type", "accept", "mcp-protocol-version", "mcp-method", "mcp-name", "mcp-session-id", "last-event-id"];
+// Combined mode routes only fmsg API keys to API-key authentication; everything else is OAuth.
+const API_KEY_BEARER = /^Bearer fmsgk_/iu;
 
 /** Convert a Node request into a web-standard Request for the MCP handler. */
 export function toWebRequest(req: IncomingMessage, signal?: AbortSignal): Request {
@@ -92,7 +94,14 @@ export async function sendWebResponse(res: ServerResponse, response: Response, f
   }
 }
 
-export type HttpServerHandle = { server: Server; close: () => Promise<void>; provider: ApiKeyCallerProvider | OAuthCallerProvider };
+export type HttpServerHandle = {
+  server: Server;
+  close: () => Promise<void>;
+  /** The OAuth provider when OAuth is configured, otherwise the API-key provider. */
+  provider: ApiKeyCallerProvider | OAuthCallerProvider;
+  /** Each configured provider; both are set in combined `oauth+api-key` mode. */
+  providers: { apiKey?: ApiKeyCallerProvider; oauth?: OAuthCallerProvider };
+};
 
 export function createHttpServer(config: Config, log: (line: string) => void = (l) => console.error(l)): HttpServerHandle {
   const allowedHosts = config.http.allowedHosts.length
@@ -104,21 +113,24 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   if (allowedHosts.some((host) => /[*\s/@?#]/u.test(host))) throw new Error("FMSG_MCP_ALLOWED_HOSTS must contain explicit hostnames without wildcards, schemes or paths");
   const allowedOrigins = config.http.allowedOrigins.map(normalizeOrigin);
   const safeLog = (line: string) => log(safeErrorMessage(line));
-  const provider = config.oauth ? new OAuthCallerProvider(config, safeLog) : new ApiKeyCallerProvider(config, safeLog);
+  // Combined mode keeps separate providers and MCP handlers, so a caller is only
+  // ever resolved by the provider that authenticated it.
+  const oauthProvider = config.oauth ? new OAuthCallerProvider(config, safeLog) : undefined;
+  const apiKeyProvider = !config.oauth || config.oauth.acceptApiKeys ? new ApiKeyCallerProvider(config, safeLog) : undefined;
   const resource = config.oauth ? new URL(config.oauth.resourceUrl) : undefined;
   const publicOrigin = downloadBaseUrl(config) ? new URL(downloadBaseUrl(config)!).origin : undefined;
   const metadataPath = resource ? `/.well-known/oauth-protected-resource${resource.pathname === "/" ? "" : resource.pathname}` : undefined;
   const metadataUrl = resource ? `${resource.origin}${metadataPath}` : "";
-  const handler = createMcpHandler(({ authInfo }) =>
-    createFmsgMcpServer(provider, config, authInfo ? {
-      address: config.oauth ? String(authInfo.extra?.address ?? "") : authInfo.clientId,
-    } : {}),
+  const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => createMcpHandler(({ authInfo }) =>
+    createFmsgMcpServer(provider, config, authInfo ? { address: address(authInfo) } : {}),
     { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
   );
+  const oauthHandler = oauthProvider && mcpHandler(oauthProvider, (authInfo) => String(authInfo.extra?.address ?? ""));
+  const apiKeyHandler = apiKeyProvider && mcpHandler(apiKeyProvider, (authInfo) => authInfo.clientId);
   const active = new Set<AbortController>();
 
   const server = createServer((req, res) => {
-    let authenticated: AuthInfo | undefined;
+    let release: (() => void) | undefined;
     const controller = new AbortController();
     active.add(controller);
     const abort = () => controller.abort();
@@ -188,7 +200,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
         try { download = parseDownloadPath(url.pathname); }
         catch { return sendWebResponse(res, new Response("invalid attachment download path", { status: 400 })); }
       }
-      const serveDownload = async (auth: AuthInfo) => {
+      const serveDownload = async (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo) => {
         let caller: Caller | undefined;
         try {
           caller = await provider.forRequest(auth);
@@ -211,16 +223,19 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
             }
           }
           const status = rejectedAuth ? 401 : error instanceof FmsgHttpError && error.status >= 400 && error.status <= 599 ? error.status : 502;
+          const challenge = `Bearer error="invalid_token"${resource ? `, resource_metadata=${JSON.stringify(metadataUrl)}` : ""}`;
           return sendWebResponse(res, Response.json({ error: describeError(error) }, {
-            status, headers: status === 401 ? { "www-authenticate": 'Bearer error="invalid_token"' } : {},
+            status, headers: status === 401 ? { "www-authenticate": challenge } : {},
           }));
         }
       };
-      if (provider instanceof OAuthCallerProvider) {
+      const authorization = request.headers.get("authorization") ?? "";
+      if (oauthProvider && oauthHandler && !(apiKeyProvider && API_KEY_BEARER.test(authorization))) {
         try {
-          const bearer = /^Bearer ([A-Za-z0-9._~+\/-]+=*)$/iu.exec(request.headers.get("authorization") ?? "");
+          const bearer = /^Bearer ([A-Za-z0-9._~+\/-]+=*)$/iu.exec(authorization);
           if (!bearer) throw invalidToken();
-          authenticated = await provider.verifyAccessToken(bearer[1]!);
+          const authenticated = await oauthProvider.verifyAccessToken(bearer[1]!);
+          release = () => oauthProvider.release(authenticated);
           let parsedBody: unknown;
           if (request.method === "POST") {
             try { parsedBody = await request.json(); }
@@ -228,17 +243,17 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
             if (Array.isArray(parsedBody)) return sendWebResponse(res, new Response("MCP batch requests are not supported", { status: 400 }));
           }
           const scopes = download ? [READ_SCOPE] : requestScopes(parsedBody);
-          if (scopes.some(scope => !authenticated!.scopes.includes(scope))) throw insufficientScope(scopes);
-          if (download) return await serveDownload(authenticated);
+          if (scopes.some(scope => !authenticated.scopes.includes(scope))) throw insufficientScope(scopes);
+          if (download) return await serveDownload(oauthProvider, authenticated);
           // Discover/list operations only need the incoming JWT. Resolve an
           // exchanged credential before starting any protected tool response.
           if (scopes.length) {
-            const caller = await provider.forRequest(authenticated);
+            const caller = await oauthProvider.forRequest(authenticated);
             await caller.client.getToken(false, controller.signal);
           }
           const state: OAuthRequestState = { scopes };
           return await oauthRequestState.run(state, async () => {
-            const response = await handler.fetch(request, { authInfo: authenticated, parsedBody });
+            const response = await oauthHandler.fetch(request, { authInfo: authenticated, parsedBody });
             await sendWebResponse(res, response, () => state.error ? oauthErrorResponse(state.error, metadataUrl) : undefined);
           });
         } catch (error) {
@@ -246,19 +261,24 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
           throw error;
         }
       }
+      if (!apiKeyProvider || !apiKeyHandler) throw new Error("no authentication provider configured");
       // Capture the lease before middleware's expiry/scope checks, so finally also
       // releases requests rejected after the upstream identity was verified.
       const gate = requireBearerAuth({
         verifier: { verifyAccessToken: async (token) => {
-          authenticated = await provider.verifyAccessToken(token);
+          const authenticated = await apiKeyProvider.verifyAccessToken(token);
+          release = () => apiKeyProvider.release(authenticated);
           return authenticated;
         } },
-        requiredScopes: [FMSG_SCOPE],
+        // In combined mode, challenge with the OAuth metadata so hosts can discover
+        // sign-in. The internal API-key scope is omitted there: it is always granted
+        // and is not an authorization-server scope a host could request.
+        ...(resource ? { resourceMetadataUrl: metadataUrl } : { requiredScopes: [FMSG_SCOPE] }),
       });
       const auth = await gate(request);
       if (auth instanceof Response) return sendWebResponse(res, auth);
-      if (download) return serveDownload(auth);
-      return sendWebResponse(res, await handler.fetch(request, { authInfo: auth }));
+      if (download) return serveDownload(apiKeyProvider, auth);
+      return sendWebResponse(res, await apiKeyHandler.fetch(request, { authInfo: auth }));
     })().catch((error) => {
       safeLog(`request failed: ${error instanceof Error ? error.message : String(error)}`);
       if (res.destroyed) return;
@@ -266,7 +286,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       res.writeHead(500, { "content-type": "text/plain" });
       res.end("internal error");
     }).finally(() => {
-      if (authenticated) provider.release(authenticated);
+      release?.();
       active.delete(controller);
       req.off("aborted", abort);
       res.off("close", abort);
@@ -279,8 +299,9 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
 
   const close = async () => {
     for (const controller of active) controller.abort();
-    provider.close();
-    await handler.close();
+    oauthProvider?.close();
+    apiKeyProvider?.close();
+    await Promise.all([oauthHandler?.close(), apiKeyHandler?.close()]);
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
       // Aborted fetches may open replacement sockets without a request, so
@@ -288,5 +309,5 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       server.closeAllConnections();
     });
   };
-  return { server, close, provider };
+  return { server, close, provider: (oauthProvider ?? apiKeyProvider)!, providers: { apiKey: apiKeyProvider, oauth: oauthProvider } };
 }

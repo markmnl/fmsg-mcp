@@ -56,6 +56,8 @@ test/fmsg-docker.e2e.test.ts   real two-host run, gated by FMSG_E2E=1
 - stdout is the stdio protocol channel: log with `console.error` only.
 - Public OSS repo: never name a specific identity provider; use `example.com` in examples.
 
+Combined `oauth+api-key` mode routes `Bearer fmsgk_…` to the API-key path and everything else to
+OAuth, with separate providers, caches and MCP handlers; never let one resolve the other's callers.
 OAuth mode validates incoming tokens for the exact MCP audience and exchanges them for a
 separate Web API token. Never forward the incoming JWT or send `X-FMSG-Act-As`. Keep scope
 classification in `src/oauth/scopes.ts` synchronized with tools; reply needs read and write.

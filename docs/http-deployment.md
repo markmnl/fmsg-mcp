@@ -2,8 +2,8 @@
 
 This example runs Caddy and fmsg-mcp on the same machine. Replace `mcp.example.com` with your DNS
 name pointing to that machine; Caddy needs access to ports 80/443 for automatic public TLS.
-Keep port 8765 bound to loopback. The command below uses API keys; for OAuth add the
-[OAuth configuration](oauth.md#operator-configuration).
+Keep port 8765 bound to loopback. The command below uses API keys; for OAuth, or OAuth and API
+keys on the same endpoint, add the [OAuth configuration](oauth.md#operator-configuration).
 
 ```sh
 FMSG_API_URL=https://api.example.com \
@@ -54,8 +54,8 @@ allow response idle time beyond `FMSG_MCP_WAIT_MAX_SECONDS` with assembly headro
 allowed and denied Host/Origin requests, unauthenticated 401 responses, CORS preflight, a read,
 and cancellation through the actual deployed proxy before advertising that deployment.
 
-The metadata routes are public in OAuth mode and must reach the server for MCP authorization
-discovery. In API-key mode they return 404. When OAuth is configured, its resource URL supplies
+The metadata routes are public in `oauth` and `oauth+api-key` modes and must reach the server for
+MCP authorization discovery. In API-key mode they return 404. When OAuth is configured, its resource URL supplies
 the public same-origin value, so explicitly listing that origin is optional.
 
 ## Binary attachment downloads

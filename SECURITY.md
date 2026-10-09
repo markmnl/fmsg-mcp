@@ -8,7 +8,7 @@ rather than a public issue.
 
 - Messaging authorization, grants, address status, quotas and acceptance remain the responsibility
   of fmsg-webapi and the host services. Each MCP request uses its caller's upstream identity.
-- Over stdio the API key comes from the environment. HTTP callers supply their own bearer keys or OAuth access tokens, according to the configured mode.
+- Over stdio the API key comes from the environment. HTTP callers supply their own bearer keys or OAuth access tokens, according to the configured mode. Combined `oauth+api-key` mode routes `fmsgk_` keys to API-key authentication and all other credentials to OAuth, with separate caches.
   Keys and JWTs are retained in process memory for token renewal; hashes index the HTTP client cache.
   This server does not intentionally persist them. Idle entries expire on access and periodic sweeps
   (at most 30 seconds apart). Evicted or invalidated clients close immediately if idle; active requests

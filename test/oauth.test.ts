@@ -5,12 +5,13 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { createHttpServer, type HttpServerHandle } from "../src/http.js";
 import { OAuthIssuer } from "../src/oauth/issuer.js";
 import { OAuthCallerProvider } from "../src/oauth/provider.js";
+import { ApiKeyCallerProvider } from "../src/auth.js";
 import { loadOAuthConfig } from "../src/oauth/config.js";
 import { TOOL_SCOPES } from "../src/oauth/scopes.js";
 import { waitForMessage } from "../src/wait.js";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
 import { FakeOAuthServer } from "./fake-oauth-server.js";
-import { ALICE, BOB, call, configFor, structured } from "./helpers.js";
+import { ALICE, BOB, CAROL, call, configFor, structured } from "./helpers.js";
 
 describe("HTTP OAuth", () => {
   let api: FakeFmsgServer;
@@ -442,6 +443,120 @@ describe("HTTP OAuth", () => {
   });
 });
 
+describe("HTTP OAuth combined with API keys", () => {
+  let api: FakeFmsgServer;
+  let idp: FakeOAuthServer;
+  let http: HttpServerHandle;
+  let base: string;
+  let oauth: OAuthCallerProvider;
+  let apiKeys: ApiKeyCallerProvider;
+  const clients: Client[] = [];
+  const metadata = 'resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"';
+  beforeEach(async () => {
+    api = new FakeFmsgServer(); await api.start();
+    idp = new FakeOAuthServer(api); await idp.start();
+    http = createHttpServer({ ...configFor(api, "http"), oauth: { ...idp.config, acceptApiKeys: true } }, () => undefined);
+    oauth = http.providers.oauth!;
+    apiKeys = http.providers.apiKey!;
+    await new Promise<void>(resolve => http.server.listen(0, "127.0.0.1", resolve));
+    base = `http://127.0.0.1:${(http.server.address() as AddressInfo).port}`;
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(clients.splice(0).map(client => client.close()));
+    await http.close(); await idp.stop(); await api.stop();
+  });
+  async function post(token?: string, method = "tools/list", params: unknown = {}) {
+    return fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream",
+      ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+  }
+  async function connect(token: string): Promise<Client> {
+    const client = new Client({ name: "combined-test", version: "0.0.0" }, { versionNegotiation: { mode: "auto" } });
+    clients.push(client);
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
+    return client;
+  }
+
+  it("serves protected-resource metadata and OAuth challenges for missing or non-key tokens", async () => {
+    expect(http.provider).toBe(oauth);
+    for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+      const response = await fetch(`${base}${path}`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ resource: idp.config.resourceUrl, authorization_servers: [idp.config.issuerUrl] });
+    }
+    const apiKeyVerify = vi.spyOn(apiKeys, "verifyAccessToken");
+    for (const token of [undefined, "invalid", await idp.token({ aud: idp.config.exchangeAudience })]) {
+      const response = await post(token);
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toContain(metadata);
+      expect(response.headers.get("www-authenticate")).toContain('error="invalid_token"');
+      await response.body?.cancel();
+    }
+    expect(apiKeyVerify).not.toHaveBeenCalled();
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it("serves API-key callers through the API-key provider without contacting the authorization server", async () => {
+    const oauthVerify = vi.spyOn(oauth, "verifyAccessToken");
+    const issuerVerify = vi.spyOn(oauth.issuer, "verify");
+    const client = await connect("fmsgk_alice_secret");
+    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
+    expect((await call(client, "send_message", { to: [BOB], topic: "Hello", body: "hello" })).isError).toBeFalsy();
+    expect(oauthVerify).not.toHaveBeenCalled();
+    expect(issuerVerify).not.toHaveBeenCalled();
+    expect(idp.requests).toHaveLength(0);
+    expect(api.requests.some(req => req.path === "/fmsg/token")).toBe(true);
+    expect(apiKeys.size).toBe(1);
+    expect(oauth.size).toBe(0);
+  });
+
+  it("serves OAuth callers through token exchange, never as API keys", async () => {
+    const apiKeyVerify = vi.spyOn(apiKeys, "verifyAccessToken");
+    const client = await connect(await idp.token());
+    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
+    expect(apiKeyVerify).not.toHaveBeenCalled();
+    expect(idp.exchanges).toHaveLength(1);
+    expect(api.requests.every(req => req.path !== "/fmsg/token" && req.authorization === `Bearer ${idp.exchanges[0]!.token}`)).toBe(true);
+    expect(oauth.size).toBe(1);
+    expect(apiKeys.size).toBe(0);
+  });
+
+  it("challenges rejected API keys with OAuth discovery and still enforces OAuth scopes", async () => {
+    const issuerVerify = vi.spyOn(oauth.issuer, "verify");
+    const rejected = await post("fmsgk_unknown_secret");
+    expect(rejected.status).toBe(401);
+    const challenge = rejected.headers.get("www-authenticate")!;
+    expect(challenge).toContain('error="invalid_token"');
+    expect(challenge).toContain(metadata);
+    expect(challenge).not.toContain("scope=");
+    expect(await rejected.text()).not.toContain("fmsgk_unknown_secret");
+    expect(issuerVerify).not.toHaveBeenCalled();
+    const readOnly = await post(await idp.token({ scope: "fmsg:read" }), "tools/call", { name: "send_message", arguments: { to: [BOB], topic: "x", body: "x" } });
+    expect(readOnly.status).toBe(403);
+    expect(readOnly.headers.get("www-authenticate")).toContain('scope="fmsg:write"');
+    expect(idp.exchanges).toHaveLength(0);
+  });
+
+  it("downloads attachments for both API-key and OAuth callers", async () => {
+    const message = api.seed({ from: CAROL, to: [ALICE], attachments: [{ filename: "data.bin", data: Buffer.from([1, 2, 3]), type: "application/octet-stream" }] });
+    const path = `${base}/mcp/attachments/${message.id}/data.bin`;
+    for (const token of ["fmsgk_alice_secret", await idp.token()]) {
+      const response = await fetch(path, { headers: { authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([1, 2, 3]));
+    }
+    for (const token of [undefined, "fmsgk_unknown_secret"]) {
+      const response = await fetch(path, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toContain(metadata);
+      await response.body?.cancel();
+    }
+    const writeOnly = await fetch(path, { headers: { authorization: `Bearer ${await idp.token({ scope: "fmsg:write" })}` } });
+    expect(writeOnly.status).toBe(403);
+    expect(idp.exchanges).toHaveLength(1);
+  });
+});
+
 describe("OAuth configuration", () => {
   const env = { FMSG_MCP_AUTH_MODE: "oauth", FMSG_MCP_OAUTH_RESOURCE_URL: "https://mcp.example.com/mcp",
     FMSG_MCP_OAUTH_ISSUER_URL: "https://idp.example.com/oauth", FMSG_MCP_OAUTH_CLIENT_ID: "mcp",
@@ -450,6 +565,11 @@ describe("OAuth configuration", () => {
     expect(loadOAuthConfig({}, "http")).toBeUndefined();
     expect(loadOAuthConfig(env, "http")).toMatchObject({ addressClaim: "sub", exchangeAudience: "fmsg-webapi" });
     expect(() => loadOAuthConfig(env, "stdio")).toThrow("requires HTTP");
+    expect(loadOAuthConfig(env, "http")?.acceptApiKeys).toBeUndefined();
+    expect(loadOAuthConfig({ ...env, FMSG_MCP_AUTH_MODE: "oauth+api-key" }, "http")).toMatchObject({ acceptApiKeys: true, addressClaim: "sub" });
+    expect(() => loadOAuthConfig({ ...env, FMSG_MCP_AUTH_MODE: "oauth+api-key" }, "stdio")).toThrow("requires HTTP");
+    expect(() => loadOAuthConfig({ ...env, FMSG_MCP_AUTH_MODE: "oauth+api-key", FMSG_MCP_OAUTH_CLIENT_ID: "" }, "http")).toThrow("required");
+    expect(() => loadOAuthConfig({ ...env, FMSG_MCP_AUTH_MODE: "api-key+oauth" }, "http")).toThrow("must be api-key, oauth or oauth+api-key");
     expect(() => loadOAuthConfig({ ...env, FMSG_MCP_AUTH_MODE: "api-key" }, "http")).toThrow("Set FMSG_MCP_AUTH_MODE");
     for (const key of Object.keys(env).filter(key => key !== "FMSG_MCP_AUTH_MODE")) {
       expect(() => loadOAuthConfig({ ...env, [key]: "" }, "http")).toThrow("required");
