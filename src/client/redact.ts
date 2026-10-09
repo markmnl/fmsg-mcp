@@ -20,27 +20,33 @@ const PATTERNS: Array<[RegExp, string | ((match: string, ...groups: string[]) =>
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}|\bxapp-[0-9]-[A-Za-z0-9-]{10,}/gu, "[REDACTED_CHAT_TOKEN]"],
   // Cloud access key ids: long-term (AKIA…) and temporary (ASIA…), always 20 upper-case letters and digits.
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu, "[REDACTED_ACCESS_KEY_ID]"],
-  // A 40-character secret access key next to its usual label (aws_secret_access_key = …, "SecretAccessKey": "…").
+  // A 40-character secret access key next to its usual label (aws_secret_access_key = …, "SecretAccessKey": "…",
+  // AWS secret access key: …).
   [
-    /\b((?:aws_?)?secret_?access_?key|aws_?secret_?key)(["']?\s*[:=]\s*["']?)([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])/giu,
+    /\b((?:aws[ _-]?)?secret[ _-]?access[ _-]?key|aws[ _-]?secret[ _-]?key)(["']?\s*[:=]\s*["']?)([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])/giu,
     (_match, label: string, separator: string) => `${label}${separator}[REDACTED_SECRET_ACCESS_KEY]`,
   ],
   [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/gu, "[REDACTED_PRIVATE_KEY]"],
 ];
 
-export type Redacted = { text: string; count: number };
+/** `kinds` names what was replaced, from the placeholders (`[REDACTED_GITHUB_TOKEN]` is `github_token`), once each, sorted. */
+export type Redacted = { text: string; count: number; kinds: string[] };
 
-/** Replace secrets with placeholders and report how many were replaced. */
+/** Replace secrets with placeholders and report how many were replaced, and of what kinds. */
 export function redactSecrets(text: string): Redacted {
   let count = 0;
+  const kinds = new Set<string>();
   let out = text;
   for (const [pattern, replacement] of PATTERNS) {
     out = out.replace(pattern, (match: string, ...groups: string[]) => {
       count += 1;
-      return typeof replacement === "string" ? replacement : replacement(match, ...groups);
+      const replaced = typeof replacement === "string" ? replacement : replacement(match, ...groups);
+      const kind = /\[REDACTED_([A-Z_]+)\]/u.exec(replaced)?.[1];
+      if (kind) kinds.add(kind.toLowerCase());
+      return replaced;
     });
   }
-  return { text: out, count };
+  return { text: out, count, kinds: [...kinds].sort() };
 }
 
 /** One-line, secret-free rendering of an error for logs and tool results. */

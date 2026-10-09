@@ -37,8 +37,12 @@ export function openEnum(values: readonly string[], detail?: string): z.ZodStrin
   return z.string().describe(`one of ${list}${detail ? `; ${detail}` : ""}. More values may be added`);
 }
 
-/** Shared wording for `size`: the stored wire size, which is the compressed length for deflated bodies. */
-export const SIZE_DESCRIPTION = "body size in bytes on the wire; the compressed length when compressed is true";
+/**
+ * Shared wording for `size`: the size the host stores. A receiving host stores the compressed wire body; a sending
+ * host keeps the uncompressed body it compressed for sending.
+ */
+export const SIZE_DESCRIPTION =
+  "body size in bytes as stored by your host: for a message you received with compressed true, the compressed wire length; your own sent messages store the uncompressed length. body_bytes, where given, is the decoded length";
 
 export const attachmentItem = outputObject({
   filename: z.string(),
@@ -93,7 +97,7 @@ export const messageItem = outputObject({
   terminal: z.boolean(),
   type: z.string(),
   size: z.number().describe(SIZE_DESCRIPTION),
-  compressed: z.boolean().optional().describe("true when the body was sent deflate-compressed, so size is the compressed length"),
+  compressed: z.boolean().optional().describe("true when the body was sent deflate-compressed on the wire (see size)"),
   preview: z.string().describe("start of the body; may be shorter than the full body"),
   attachments: z.array(attachmentItem).describe("sorted by filename, the same order in every tool"),
   reactions: z.array(outputObject({ emoji: z.string(), from: z.array(z.string()) })),

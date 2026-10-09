@@ -48,7 +48,7 @@ export type FmsgMessage = {
   time?: number | null;
   topic?: string;
   type?: string;
-  /** Body size on the wire: the compressed size when `deflate` is true. */
+  /** Stored body size: the compressed size on a received message with `deflate`; a sender stores the uncompressed size. */
   size?: number;
   /** Up to the host's preview limit of the decoded body; complete only when `deflate` is false and it covers `size`. */
   short_text?: string;
@@ -94,7 +94,7 @@ export type ThreadMessage = {
   time?: number | null;
   topic?: string;
   type?: string;
-  /** Body size on the wire: the compressed size when `deflate` is true. */
+  /** Stored body size: the compressed size on a received message with `deflate`; a sender stores the uncompressed size. */
   size?: number;
   deflate?: boolean;
   message_sha256?: string;
@@ -140,6 +140,8 @@ export type SendResult = {
   attachments: Attachment[];
   /** Selected secret patterns replaced in the outgoing body and topic. */
   redactions: number;
+  /** Kinds of secret replaced, such as "github_token"; see redactSecrets. */
+  redacted: string[];
   /** Topic actually sent, after redaction; empty for replies. */
   topic: string;
 };

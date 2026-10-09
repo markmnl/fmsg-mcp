@@ -87,9 +87,9 @@ export function sortAttachments<T extends { filename: string }>(attachments: rea
   return [...(attachments ?? [])].sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0));
 }
 
-/** "N bytes", noting when that is the compressed wire size. */
+/** "N bytes", noting when the body was sent compressed (see SIZE_DESCRIPTION for what N then is). */
 export function sizeText(size: number | undefined, compressed: boolean | undefined): string {
-  return `${size ?? 0} bytes${compressed ? " compressed" : ""}`;
+  return `${size ?? 0} bytes${compressed ? ", sent compressed" : ""}`;
 }
 
 /** `threadTopic`: for a reply, its thread root's topic, shown after the parent id. */

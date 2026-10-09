@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Secret access keys are redacted next to a label written in words or with hyphens ("AWS secret
+  access key: …", `aws-secret-access-key=…`) as well as the `aws_secret_access_key` forms.
+- `send_message` and `reply` results add `redacted`, the kinds of secret replaced (for example
+  `["access_key_id", "github_token"]`), and the text names them, so the sender need not fetch the
+  message to see what changed. `FmsgClient.send()` and `redactSecrets()` report them too.
+- `reply` results report the thread's `thread_topic` for a reply anywhere in the thread, not only
+  for a reply to the root (one thread lookup; null when the root is not visible).
+- `size` is described as the size the host stores: a receiving host stores the compressed wire
+  body, so a received message with `compressed` true reports the compressed length, while a
+  sender's copy of its own message keeps the uncompressed length. The text says "N bytes, sent
+  compressed".
+
 - `wait_for_message` no longer lets a model step past an unread message silently. Messages on other
   threads that arrive while a batch settles are not returned and `after_id` moves past them, as
   before; now `next` (and the text) names each one first ("Also new and not included here: message

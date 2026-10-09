@@ -128,20 +128,20 @@ describe("result clarity", () => {
     expect(walked.messages[0]).toMatchObject({ added: [CAROL] });
   });
 
-  it("labels size as the wire size and reports compression", async () => {
+  it("labels size as the stored size and reports compression", async () => {
     const body = "compressible ".repeat(40);
     const m = fake.seed({ from: BOB, to: [ALICE], topic: "zip", data: body, deflate: true, wireSize: 40 });
     const listed = structured<{ messages: Array<{ id: string; size: number; compressed: boolean }> }>(await call(h.client, "list_messages"));
     expect(listed.messages[0]).toMatchObject({ id: m.id, size: 40, compressed: true });
     const got = await call(h.client, "get_message", { id: m.id });
     expect(structured<{ message: { compressed: boolean }; body_bytes: number }>(got)).toMatchObject({ message: { compressed: true }, body_bytes: body.length });
-    expect(text(got)).toContain("40 bytes compressed");
+    expect(text(got)).toContain("40 bytes, sent compressed");
     const thread = structured<{ messages: Array<{ size: number; compressed: boolean; body_bytes: number }> }>(await call(h.client, "get_thread", { id: m.id }));
     expect(thread.messages[0]).toMatchObject({ size: 40, compressed: true, body_bytes: body.length });
     const plain = fake.seed({ from: BOB, to: [ALICE], data: "plain" });
     expect(structured<{ message: { compressed: boolean } }>(await call(h.client, "get_message", { id: plain.id })).message.compressed).toBe(false);
     const { tools } = await h.client.listTools();
-    expect(JSON.stringify(tools.find((t) => t.name === "list_messages")!.outputSchema)).toContain("bytes on the wire; the compressed length when compressed is true");
+    expect(JSON.stringify(tools.find((t) => t.name === "list_messages")!.outputSchema)).toContain("for a message you received with compressed true, the compressed wire length; your own sent messages store the uncompressed length");
   });
 
   it("download_attachment names the media type type and lists the attachments a message has", async () => {
@@ -195,6 +195,9 @@ describe("result clarity", () => {
     expect(structured<{ thread_topic: string }>(toRoot).thread_topic).toBe("the plan");
     expect(text(toRoot)).toContain(`in "the plan"`);
     expect(text(toRoot)).toContain(`for \`${BOB}\``);
-    expect(structured<{ thread_topic: string | null }>(await call(h.client, "reply", { id: leaf.id, body: "ok" })).thread_topic).toBeNull();
+    // A reply deeper in the thread looks the root's topic up.
+    const toLeaf = await call(h.client, "reply", { id: leaf.id, body: "ok" });
+    expect(structured<{ thread_topic: string | null }>(toLeaf).thread_topic).toBe("the plan");
+    expect(text(toLeaf)).toContain(`in "the plan"`);
   });
 });

@@ -22,7 +22,7 @@ export type AssembledMessage = {
   time_posix: number | null;
   topic?: string;
   type?: string;
-  /** Wire size: the compressed length when `compressed` is true. */
+  /** Stored size: the compressed length on a received message sent compressed. */
   size?: number;
   compressed?: boolean;
   /** Flags and add-to recipients; absent for messages you cannot see. */
@@ -32,7 +32,7 @@ export type AssembledMessage = {
   added?: string[];
   body: string | null;
   body_truncated: boolean;
-  /** Decoded body length when the body text was read; `size` is the wire size. */
+  /** Decoded body length when the body text was read; `size` is the stored size. */
   body_bytes?: number;
   attachments: Array<{ filename: string; size: number; type: string }>;
 };
@@ -55,7 +55,7 @@ export type AssembledThread = {
   omitted: number;
 };
 
-/** Flags, add-to recipients and wire size of a visible message, as thread entries carry them. */
+/** Flags, add-to recipients and stored size of a visible message, as thread entries carry them. */
 function details(m: {
   type?: string; size?: number; deflate?: boolean; no_reply?: boolean; terminal?: boolean; important?: boolean;
   add_to?: Array<{ to?: string[] }>;

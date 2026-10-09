@@ -210,8 +210,8 @@ export class FmsgClient {
   }
 
   /**
-   * Whether `short_text` already holds the complete body. `size` is the wire size,
-   * so a deflate-compressed message's preview is never treated as complete.
+   * Whether `short_text` already holds the complete body. `size` may be the
+   * compressed size, so a deflate-compressed message's preview is never treated as complete.
    */
   static shortTextIsComplete(message: FmsgMessage): boolean {
     if (typeof message.short_text !== "string") return false;
@@ -396,6 +396,7 @@ export class FmsgClient {
         time: result.time ?? null,
         attachments,
         redactions: body.count + topic.count,
+        redacted: [...new Set([...topic.kinds, ...body.kinds])].sort(),
         topic: topic.text,
       };
     } catch (error) {

@@ -24,7 +24,7 @@ const assembledMessage = outputObject({
   topic: z.string().optional(),
   type: z.string().optional(),
   size: z.number().optional().describe(SIZE_DESCRIPTION),
-  compressed: z.boolean().optional().describe("true when the body was sent deflate-compressed, so size is the compressed length"),
+  compressed: z.boolean().optional().describe("true when the body was sent deflate-compressed on the wire (see size)"),
   no_reply: z.boolean().optional().describe("the sender asked for no replies; absent for messages you cannot see"),
   terminal: z.boolean().optional().describe("no replies, add-to or reactions are possible; absent for messages you cannot see"),
   important: z.boolean().optional(),
@@ -39,7 +39,7 @@ const assembledMessage = outputObject({
  * The topic of a reply's thread root (fmsg topics live only on the root): one thread lookup, made only for replies.
  * Null when the root is not visible or the lookup fails; a failure here never fails the read itself.
  */
-async function rootTopic(client: FmsgClient, message: FmsgMessage, signal: AbortSignal): Promise<string | null> {
+export async function rootTopic(client: FmsgClient, message: FmsgMessage, signal: AbortSignal): Promise<string | null> {
   if (!message.pid) return message.topic ?? "";
   try {
     const thread = await client.getThreadMessages(message.id, signal);

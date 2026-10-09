@@ -4,6 +4,7 @@ import type { OutboundAttachment } from "../client/types.js";
 import { toolError } from "../errors.js";
 import { addressList, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
+import { rootTopic } from "./read.js";
 
 const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
@@ -35,11 +36,16 @@ const sentOutput = outputObject({
   parent_id: z.string().nullable(),
   attachments: z.array(attachmentItem).describe("sorted by filename, the same order in every tool"),
   redactions: z.number().describe("secrets replaced with placeholders before sending"),
+  redacted: z.array(z.string()).optional().describe("the kinds of secret replaced, such as github_token; empty when none"),
   warnings: z.array(z.string()),
   thread_topic: z.string().nullable().optional().describe(
-    "the thread's topic: the topic sent for a new message; for a reply, the parent's topic when the parent is the thread root, otherwise null (get_thread reports it)",
+    "the thread's topic: the topic sent for a new message; for a reply, the thread root's topic, or null when the root is not visible",
   ),
 });
+
+function redactionNote(count: number, kinds: string[]): string {
+  return count ? `. ${count} secret(s) were redacted before sending (${kinds.join(", ")}).` : ".";
+}
 
 export const registerSendTools: Register = (server, deps) => {
   server.registerTool(
@@ -86,12 +92,13 @@ export const registerSendTools: Register = (server, deps) => {
           parent_id: null,
           attachments: sentAttachments(sent.attachments, outbound),
           redactions: sent.redactions,
+          redacted: sent.redacted,
           warnings: [] as string[],
           thread_topic: sent.topic,
         };
         const text = `Sent message ${sent.id} "${sent.topic}" to ${addressList(recipients)} at ${structured.time ?? "?"}` +
           (structured.attachments.length ? ` with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
-          (structured.redactions ? `. ${structured.redactions} secret(s) were redacted before sending.` : ".");
+          redactionNote(structured.redactions, structured.redacted);
         return ok(text, structured);
       }),
   );
@@ -150,13 +157,14 @@ export const registerSendTools: Register = (server, deps) => {
           parent_id: parent.id,
           attachments: sentAttachments(sent.attachments, outbound),
           redactions: sent.redactions,
+          redacted: sent.redacted,
           warnings,
-          // Topics live only on a thread's root; a deeper parent would need another lookup.
-          thread_topic: parent.pid ? null : (parent.topic ?? ""),
+          // The reply is already sent: a failed topic lookup only leaves the topic unknown.
+          thread_topic: await rootTopic(caller.client, parent, signal).catch(() => null),
         };
         const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
         const text = `Sent reply ${sent.id} to message ${parent.id}${topic} for ${addressList(to)} at ${structured.time ?? "?"}` +
-          (structured.redactions ? `. ${structured.redactions} secret(s) were redacted before sending.` : ".");
+          redactionNote(structured.redactions, structured.redacted);
         return ok(text, structured);
       }),
   );
