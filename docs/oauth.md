@@ -1,8 +1,9 @@
 # HTTP OAuth
 
 OAuth is an optional HTTP authentication mode. API-key HTTP and stdio remain available with
-`FMSG_MCP_AUTH_MODE=api-key` (the default). Each endpoint uses one mode; run separate instances
-if you need both. There is no API-key fallback in OAuth mode.
+`FMSG_MCP_AUTH_MODE=api-key` (the default). `FMSG_MCP_AUTH_MODE=oauth` accepts only OAuth access
+tokens; there is no API-key fallback. `FMSG_MCP_AUTH_MODE=oauth+api-key` serves both kinds of
+caller on one endpoint; see [combined mode](#combined-oauth-and-api-key-mode).
 
 A user adds the public MCP URL to a compatible host, signs in with the configured authorization
 server, and consents to messaging scopes. The host handles authorization-code/PKCE and refresh;
@@ -56,6 +57,26 @@ an arbitrary OAuth provider without token exchange is not sufficient.
 Use the [TLS deployment recipe](http-deployment.md), including its metadata routes. Browser hosts
 on other origins need `FMSG_MCP_ALLOWED_ORIGINS`. The configured resource origin is accepted as
 same-origin behind a TLS proxy; forwarded headers never select an issuer, resource or token endpoint.
+
+## Combined OAuth and API-key mode
+
+`FMSG_MCP_AUTH_MODE=oauth+api-key` (HTTP only) accepts OAuth and API-key callers at the same
+public MCP URL. It requires the complete OAuth configuration above. Each request is routed by its
+`Authorization` header:
+
+- `Bearer fmsgk_...` is handled exactly as in API-key mode. The key is exchanged at the Web API
+  and is never sent to the authorization server. OAuth scopes do not apply; the Web API decides
+  access as for any API-key caller.
+- Any other bearer token, or a missing or malformed header, is handled exactly as in OAuth mode,
+  including scope checks. Unauthenticated requests receive the OAuth `401` challenge with
+  `resource_metadata`, so hosts can discover sign-in.
+
+The two kinds of caller use separate providers and caches: a request is only ever served by the
+mechanism that authenticated it, and a JWT is never treated as an API key. Protected-resource
+metadata is served as in OAuth mode, and attachment downloads accept either credential. A rejected
+API key returns `401` with `error="invalid_token"` and the same `resource_metadata`, without a
+`scope` parameter, so a host can offer sign-in instead. API-key callers need a host that sends a
+configured `Authorization` header; hosts that only support MCP authorization sign in with OAuth.
 
 ## Discovery and client onboarding
 
@@ -126,7 +147,7 @@ Each incoming token has its own client and cache, even when two tokens name the 
 The cache lifetime is the earliest of `expires_in`, exchanged JWT expiry, incoming JWT expiry
 and five minutes from the exchange request. Renewal normally starts halfway through that lifetime.
 `FMSG_MCP_KEY_CACHE_MAX` bounds retained client entries; idle OAuth entries are evicted after five
-minutes. `FMSG_MCP_KEY_CACHE_TTL_SECONDS` applies only to API-key mode and cannot extend OAuth
+minutes. `FMSG_MCP_KEY_CACHE_TTL_SECONDS` applies only to API-key callers and cannot extend OAuth
 credentials. Active requests retain their own leases through cache eviction. No token is persisted.
 
 Web API `401` retries once after re-exchange; `403` never retries. An expiry timer closes an OAuth

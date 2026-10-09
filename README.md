@@ -103,6 +103,7 @@ configured `Authorization: Bearer fmsgk_...` header. Each caller supplies its ow
 header means a shared fmsg identity. For browser sign-in without user API keys, configure
 [HTTP OAuth](docs/oauth.md): the operator supplies an issuer, resource URI and exchange client.
 Users add the public MCP URL in a host supporting that issuer's client registration method.
+`FMSG_MCP_AUTH_MODE=oauth+api-key` accepts both OAuth and API-key callers on the same URL.
 
 For [Claude Code over HTTP](https://code.claude.com/docs/en/mcp):
 
@@ -155,8 +156,8 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_API_URL` | — | Base URL of the fmsg Web API (required) |
 | `FMSG_API_KEY` | — | `fmsgk_…` key; stdio mode only |
 | `FMSG_API_PUBLIC_URL` | `FMSG_API_URL` (HTTP mode: only if HTTPS) | Web API URL reported to users by `whoami`; never used for requests. Set it when the server reaches the Web API at an internal address. Without it, HTTP mode reports no URL for a cleartext `FMSG_API_URL`. Validated like `FMSG_API_URL` |
-| `FMSG_MCP_AUTH_MODE` | `api-key` | HTTP authentication: `api-key` or `oauth`; see [OAuth settings](docs/oauth.md#operator-configuration) |
-| `FMSG_MCP_PUBLIC_URL` | OAuth resource URL, otherwise unset | Public MCP endpoint, including `/mcp`; enables the HTTP download-link tool. HTTPS required except loopback; in OAuth mode must equal `FMSG_MCP_OAUTH_RESOURCE_URL` |
+| `FMSG_MCP_AUTH_MODE` | `api-key` | HTTP authentication: `api-key`, `oauth`, or `oauth+api-key` to accept both on one endpoint; see [OAuth settings](docs/oauth.md#operator-configuration) and [combined mode](docs/oauth.md#combined-oauth-and-api-key-mode) |
+| `FMSG_MCP_PUBLIC_URL` | OAuth resource URL, otherwise unset | Public MCP endpoint, including `/mcp`; enables the HTTP download-link tool. HTTPS required except loopback; when OAuth is enabled must equal `FMSG_MCP_OAUTH_RESOURCE_URL` |
 | `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |
 | `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>` |
 | `FMSG_DIRECTORY` | — | JSON file mapping short names to full addresses |
@@ -165,7 +166,7 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
 | `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
 | `FMSG_MCP_ALLOWED_ORIGINS` | same origin; loopback origins on loopback binds | Comma-separated browser origins including scheme and port; an explicit list replaces the loopback default; hostname-only values are rejected |
-| `FMSG_MCP_KEY_CACHE_MAX` / `FMSG_MCP_KEY_CACHE_TTL_SECONDS` | `500` / `1800` | HTTP client cache bound; TTL applies only to API-key mode |
+| `FMSG_MCP_KEY_CACHE_MAX` / `FMSG_MCP_KEY_CACHE_TTL_SECONDS` | `500` / `1800` | HTTP client cache bound; TTL applies only to API-key callers |
 
 The API key is exchanged for a short-lived access token that the server renews automatically.
 API URLs must not contain credentials, query strings or fragments. Authenticated requests do not
