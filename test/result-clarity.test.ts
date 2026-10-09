@@ -38,7 +38,7 @@ describe("result clarity", () => {
     expect(r.next).toMatch(/Then call wait_for_message with after_id "\d+" to keep listening\.$/u);
     expect(text(result)).toContain(r.next);
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "wait_for_message")!;
-    expect(tool.description).toContain("a later wait will not return them");
+    expect(tool.description).toContain("after_id moves past them and pending_ids lists them");
   });
 
   it("get_thread says it returns the lineage only and keeps complete about the lineage", async () => {
@@ -53,7 +53,7 @@ describe("result clarity", () => {
     expect(t.next).toContain(LINEAGE_ONLY);
     expect(text(result)).toContain(LINEAGE_ONLY);
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "get_thread")!;
-    expect(tool.description).toContain("other replies in the same thread");
+    expect(tool.description).toContain("Other replies in the thread (other branches) may exist and are not included: list_messages and list_sent show them");
     expect(JSON.stringify(tool.outputSchema)).toContain("says nothing about other replies");
   });
 
@@ -169,7 +169,7 @@ describe("result clarity", () => {
   it("describes delivery_status for received messages and what via means", async () => {
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "delivery_status")!;
     expect(tool.description).toContain("for a received message");
-    expect(tool.description).toContain("add_to for recipients added later with the fmsg add-to mechanism");
+    expect(JSON.stringify(tool.outputSchema)).toContain("add_to for recipients added later with the fmsg add-to mechanism");
     const received = fake.seed({ from: BOB, to: [ALICE], data: "hi" });
     const status = await call(h.client, "delivery_status", { id: received.id });
     expect(structured<{ recipients: Array<{ addr: string }> }>(status).recipients.map((r) => r.addr)).toEqual([ALICE]);
@@ -199,5 +199,43 @@ describe("result clarity", () => {
     const toLeaf = await call(h.client, "reply", { id: leaf.id, body: "ok" });
     expect(structured<{ thread_topic: string | null }>(toLeaf).thread_topic).toBe("the plan");
     expect(text(toLeaf)).toContain(`in "the plan"`);
+  });
+
+  it("names resolved short names and redactions as things to tell the user", async () => {
+    const sent = await call(h.client, "send_message", { to: ["bob", CAROL], topic: "hi", body: "id AKIAIOSFODNN7EXAMPLE" });
+    const r = structured<{ resolved: Array<{ input: string; address: string }>; warnings: string[] }>(sent);
+    expect(r.resolved).toEqual([{ input: "bob", address: BOB }]);
+    expect(r.warnings).toEqual([
+      "Tell the user 1 secret(s) (access_key_id) were replaced with placeholders before sending.",
+      `Short names were resolved: bob → ${BOB}.`,
+    ]);
+    expect(text(sent)).toContain(`Short names resolved: bob → \`${BOB}\`.`);
+    // Full addresses alone add nothing.
+    const plain = structured<Record<string, unknown>>(await call(h.client, "reply", { id: structured<{ id: string }>(sent).id, body: "ok", recipients: [BOB] }));
+    expect(plain.resolved).toBeUndefined();
+    expect(plain.warnings).toEqual([]);
+  });
+
+  it("rejects unknown arguments instead of ignoring them", async () => {
+    const result = await call(h.client, "list_messages", { unread: true });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/unread/u);
+  });
+
+  it("whoami gives the server version in its text", async () => {
+    expect(text(await call(h.client, "whoami"))).toMatch(/Server version \d+\.\d+\.\d+/u);
+  });
+
+  it("describes every input parameter", async () => {
+    const missing: string[] = [];
+    const walk = (schema: { properties?: Record<string, { description?: string; items?: unknown }> }, at: string) => {
+      for (const [name, property] of Object.entries(schema.properties ?? {})) {
+        if (!property.description && !["id", "ids", "limit", "offset"].includes(name)) missing.push(`${at}.${name}`);
+        const items = property.items as typeof schema | undefined;
+        if (items?.properties) walk(items, `${at}.${name}[]`);
+      }
+    };
+    for (const tool of (await h.client.listTools()).tools) walk(tool.inputSchema as Parameters<typeof walk>[0], tool.name);
+    expect(missing).toEqual([]);
   });
 });

@@ -22,7 +22,7 @@ export const registerListTools: Register = (server, deps) => {
         "read state (mark_read accepts them) and carry the emoji in reaction. Topics are set only on a thread's first " +
         "message; get_thread reports a reply's thread_topic. Use get_message for a full body and get_thread for the " +
         "conversation around a message.",
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         ...pageInput,
         unread_only: z.boolean().default(false).describe("keep only unread messages from the fetched page (reactions only with include_reactions)"),
       }),
@@ -60,7 +60,7 @@ export const registerListTools: Register = (server, deps) => {
       description:
         "List messages sent by this address (including unsent drafts, shown with time null), newest first, with " +
         "per-recipient delivery state. Use delivery_status for one message's detail.",
-      inputSchema: z.object(pageInput),
+      inputSchema: z.strictObject(pageInput),
       outputSchema: outputObject({
         messages: z.array(messageItem.extend({ delivery: z.array(deliveryItem) })),
         count: z.number(),

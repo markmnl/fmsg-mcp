@@ -4,6 +4,7 @@ import { addressText, isoTime } from "../render.js";
 import { READ_ONLY, type Register, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { toolError } from "../errors.js";
 import type { Transport } from "../config.js";
+import { VERSION } from "../version.js";
 
 /** Structured output keeps the transport ids published since 0.2.5; only the text uses the friendlier label. */
 const TRANSPORT_LABELS: Record<Transport, string> = { stdio: "stdio", http: "Streamable HTTP" };
@@ -14,9 +15,8 @@ export const registerIdentityTools: Register = (server, deps) => {
     {
       title: "Show fmsg identity",
       description:
-        "Report the fmsg address this server acts as (from the authenticated connection), the fmsg Web API URL " +
-        "(null when the server does not publish it), the MCP transport and the address-resolution defaults. " +
-        "Access is renewed automatically; no action is needed. Call this first if unsure who you are sending as.",
+        "Report the fmsg address this server acts as, the fmsg Web API URL and how short names resolve; the text " +
+        "also gives the server version. Call this first if unsure who you are sending as.",
       outputSchema: outputObject({
         address: z.string(),
         api_url: z.string().nullable(),
@@ -47,7 +47,7 @@ export const registerIdentityTools: Register = (server, deps) => {
           deps.config.apiPublicUrl
             ? `You are ${addressText(caller.address)} on ${deps.config.apiPublicUrl}, connected over ${transport}.`
             : `You are ${addressText(caller.address)}, connected over ${transport}.`,
-          "Access is renewed automatically.",
+          `Access is renewed automatically. Server version ${VERSION}.`,
         ];
         if (defaultDomain) lines.push(`Short names resolve to @name@${defaultDomain}.`);
         if (directoryNames.length) lines.push(`Directory names: ${directoryNames.join(", ")}.`);
@@ -69,7 +69,7 @@ export const registerIdentityTools: Register = (server, deps) => {
         "Resolve a recipient to a full fmsg address without sending anything: a literal @user@domain is returned " +
         `as-is${steps.length ? `, ${steps.join(", ")}` : "; this server has no short-name defaults, so other names fail"}. ` +
         "Fails when nothing matches so you can ask the user for the full address.",
-      inputSchema: z.object({ name: z.string().describe("Full fmsg address (@user@domain) or a short name") }),
+      inputSchema: z.strictObject({ name: z.string().describe("Full fmsg address (@user@domain) or a short name") }),
       outputSchema: outputObject({ address: z.string(), resolution: openEnum(["literal", "directory", "default_domain"]) }),
       annotations: { ...READ_ONLY, openWorldHint: false },
     },

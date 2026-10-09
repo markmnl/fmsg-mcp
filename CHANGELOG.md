@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Tools reject unknown arguments instead of ignoring them, so a misspelled parameter (`unread` for
+  `unread_only`) fails with the name rather than returning a plausible wrong answer.
+- Server instructions define fmsg's terms (topics on the first message only, reactions, terminal,
+  no-reply, added recipients), give the inbox routine (list unread, read the thread, act or reply,
+  then `mark_read` what was handled) and say how to find a thread by topic. Cross-tool repeats, the
+  configuration-error sentence and the download-URL sentence are gone; some chat hosts do not load
+  server instructions, so nothing a tool needs lives only there.
+- Tool descriptions are shorter where results already carry the detail: `wait_for_message` is split
+  into when, loop, skipped and limits; `delivery_status`, `whoami` and the redaction sentences are
+  trimmed. `get_thread` says where other branches are; `add_recipients` says the added people can
+  read the message and its attachments. Every input parameter now has a description.
+- `send_message`, `reply` and `add_recipients` add `resolved` when short names were given (each
+  name and the address it became), and send results put things to tell the user (redacted secrets,
+  resolved short names) in `warnings`.
+- `whoami`'s text gives the server version (its structured result is unchanged since 0.2.5).
 - Secret access keys are redacted next to a label written in words or with hyphens ("AWS secret
   access key: …", `aws-secret-access-key=…`) as well as the `aws_secret_access_key` forms.
 - `send_message` and `reply` results add `redacted`, the kinds of secret replaced (for example
