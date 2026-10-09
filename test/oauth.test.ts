@@ -178,7 +178,7 @@ describe("HTTP OAuth", () => {
     const token = await idp.token();
     const client = await connect(token);
     expect(client.getInstructions()).toContain(ALICE);
-    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "streamable-http" });
+    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
     expect((await call(client, "send_message", { to: [BOB], topic: "Hello", body: "hello" })).isError).toBeFalsy();
     expect((await call(client, "list_messages")).isError).toBeFalsy();
     expect(idp.exchanges).toHaveLength(1);
@@ -500,7 +500,7 @@ describe("HTTP OAuth combined with API keys", () => {
     const oauthVerify = vi.spyOn(oauth, "verifyAccessToken");
     const issuerVerify = vi.spyOn(oauth.issuer, "verify");
     const client = await connect("fmsgk_alice_secret");
-    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "streamable-http" });
+    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
     expect((await call(client, "send_message", { to: [BOB], topic: "Hello", body: "hello" })).isError).toBeFalsy();
     expect(oauthVerify).not.toHaveBeenCalled();
     expect(issuerVerify).not.toHaveBeenCalled();
@@ -513,7 +513,7 @@ describe("HTTP OAuth combined with API keys", () => {
   it("serves OAuth callers through token exchange, never as API keys", async () => {
     const apiKeyVerify = vi.spyOn(apiKeys, "verifyAccessToken");
     const client = await connect(await idp.token());
-    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "streamable-http" });
+    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
     expect(apiKeyVerify).not.toHaveBeenCalled();
     expect(idp.exchanges).toHaveLength(1);
     expect(api.requests.every(req => req.path !== "/fmsg/token" && req.authorization === `Bearer ${idp.exchanges[0]!.token}`)).toBe(true);

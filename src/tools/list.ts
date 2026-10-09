@@ -1,6 +1,8 @@
 import * as z from "zod/v4";
 import { messageData, messageLine } from "../render.js";
-import { READ_ONLY, type Register, UNTRUSTED, deliveryItem, deliveryOf, messageItem, ok, toItem, untrustedNotice, withCaller } from "./common.js";
+import {
+  READ_ONLY, type Register, UNTRUSTED, deliveryItem, deliveryOf, messageItem, ok, outputObject, toItem, untrustedNotice, withCaller,
+} from "./common.js";
 
 const pageInput = {
   limit: z.number().int().min(1).max(100).default(20).describe("page size (host maximum 100)"),
@@ -24,7 +26,7 @@ export const registerListTools: Register = (server, deps) => {
         ...pageInput,
         unread_only: z.boolean().default(false).describe("keep only unread messages from the fetched page (reactions only with include_reactions)"),
       }),
-      outputSchema: z.object({
+      outputSchema: outputObject({
         messages: z.array(messageItem),
         count: z.number(),
         offset: z.number(),
@@ -59,7 +61,7 @@ export const registerListTools: Register = (server, deps) => {
         "List messages sent by this address (including unsent drafts, shown with time null), newest first, with " +
         "per-recipient delivery state. Use delivery_status for one message's detail.",
       inputSchema: z.object(pageInput),
-      outputSchema: z.object({
+      outputSchema: outputObject({
         messages: z.array(messageItem.extend({ delivery: z.array(deliveryItem) })),
         count: z.number(),
         offset: z.number(),

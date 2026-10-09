@@ -3,7 +3,9 @@ import { resolveAddress } from "../address.js";
 import { assembleThread, renderThread } from "../thread.js";
 import { DATA_NOT_INSTRUCTIONS, fence, headerValue, messageData, messageLine } from "../render.js";
 import { type Skipped, waitForMessage } from "../wait.js";
-import { READ_ONLY, type Register, UNTRUSTED, idSchema, messageItem, ok, resolverFor, toItem, untrustedNotice, withCaller } from "./common.js";
+import {
+  READ_ONLY, type Register, UNTRUSTED, idSchema, messageItem, ok, openEnum, outputObject, resolverFor, toItem, untrustedNotice, withCaller,
+} from "./common.js";
 
 /** Skipped reactions as one line each, for the data block. */
 function reactionLines(skipped: Skipped[]): string[] {
@@ -40,27 +42,27 @@ export const registerWaitTools: Register = (server, deps) => {
         settle_seconds: z.number().int().min(0).max(30).default(3).describe("after the first message, keep collecting same-thread messages for this long"),
         include_thread: z.boolean().default(true).describe("include the assembled thread context of the newest message"),
       }),
-      outputSchema: z.object({
-        status: z.enum(["message", "timeout", "interrupted"]).describe("interrupted: the server is restarting; call again with after_id"),
+      outputSchema: outputObject({
+        status: openEnum(["message", "timeout", "interrupted"], "interrupted: the server is restarting; call again with after_id"),
         after_id: z.string().describe("pass this as after_id on the next call"),
         thread_root_id: z.string().nullable(),
-        thread_topic: z.string().nullable().describe("the thread root's topic (replies carry none); null when unknown"),
+        thread_topic: z.string().nullable().optional().describe("the thread root's topic (replies carry none); null when unknown"),
         reply_target_id: z.string().nullable().describe("newest message of the batch; reply to this one"),
         messages: z.array(messageItem.extend({ body: z.string().nullable() })),
-        pending_other_threads: z.array(z.object({ id: z.string(), from: z.string(), root_id: z.string().nullable() })),
-        skipped: z.array(z.object({
+        pending_other_threads: z.array(outputObject({ id: z.string(), from: z.string(), root_id: z.string().nullable() })),
+        skipped: z.array(outputObject({
           id: z.string(),
-          reason: z.enum(["own", "reaction", "no_reply", "from_mismatch", "other_thread"]),
-          from: z.string(),
+          reason: openEnum(["own", "reaction", "no_reply", "from_mismatch", "other_thread"]),
+          from: z.string().optional(),
           emoji: z.string().optional().describe("for reactions: the emoji (\"\" clears a reaction)"),
           reaction_to: z.string().nullable().optional().describe("for reactions: the message reacted to"),
         })).describe("messages deliberately passed over; after_id has advanced past them"),
-        unclassified: z.array(z.object({ id: z.string(), from: z.string(), error: z.string() })).describe(
+        unclassified: z.array(outputObject({ id: z.string(), from: z.string(), error: z.string() })).describe(
           "messages whose thread could not be determined; after_id is held before them, call again to retry",
         ),
-        transport: z.enum(["websocket", "poll"]),
+        transport: openEnum(["websocket", "poll"]),
         note: z.string().nullable(),
-        next: z.string().describe("what to do with this result"),
+        next: z.string().optional().describe("what to do with this result"),
         ...untrustedNotice,
       }),
       annotations: { ...READ_ONLY, idempotentHint: false },
