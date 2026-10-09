@@ -58,7 +58,7 @@ export const registerIdentityTools: Register = (server, deps) => {
   // Describe only the resolution steps this deployment has; both are operator settings.
   const steps = [
     ...(Object.keys(deps.config.directory ?? {}).length ? ["otherwise an entry in the operator-configured directory of short names"] : []),
-    ...(deps.config.defaultDomain === CALLER_DOMAIN ? ["otherwise @name@<your domain>, the domain of the address you act as"]
+    ...(deps.config.defaultDomain === CALLER_DOMAIN ? ["otherwise @name@<your domain>"]
       : deps.config.defaultDomain ? [`otherwise @name@${deps.config.defaultDomain}`] : []),
   ];
   server.registerTool(

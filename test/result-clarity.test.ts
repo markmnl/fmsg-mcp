@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { normalizeFmsgAddress, resolveAddress } from "../src/address.js";
+import type { FmsgMessage } from "../src/client/types.js";
+import { messageLine } from "../src/render.js";
 import { LINEAGE_ONLY } from "../src/thread.js";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
 import { ALICE, BOB, CAROL, type Harness, call, connectInMemory, structured, text } from "./helpers.js";
@@ -135,7 +137,7 @@ describe("result clarity", () => {
     expect(listed.messages[0]).toMatchObject({ id: m.id, size: 40, compressed: true });
     const got = await call(h.client, "get_message", { id: m.id });
     expect(structured<{ message: { compressed: boolean }; body_bytes: number }>(got)).toMatchObject({ message: { compressed: true }, body_bytes: body.length });
-    expect(text(got)).toContain("40 bytes, sent compressed");
+    expect(text(got)).toContain(`${body.length} bytes; 40 stored, sent compressed`);
     const thread = structured<{ messages: Array<{ size: number; compressed: boolean; body_bytes: number }> }>(await call(h.client, "get_thread", { id: m.id }));
     expect(thread.messages[0]).toMatchObject({ size: 40, compressed: true, body_bytes: body.length });
     const plain = fake.seed({ from: BOB, to: [ALICE], data: "plain" });
@@ -237,5 +239,12 @@ describe("result clarity", () => {
     };
     for (const tool of (await h.client.listTools()).tools) walk(tool.inputSchema as Parameters<typeof walk>[0], tool.name);
     expect(missing).toEqual([]);
+  });
+
+  it("marks messages you sent to yourself unread in list text", () => {
+    const base = { id: "7", pid: null, topic: "note", time: 1, type: "text/plain", size: 1, read: false, attachments: [] };
+    expect(messageLine({ ...base, from: ALICE, to: [ALICE] } as FmsgMessage, ALICE)).toContain("unread");
+    expect(messageLine({ ...base, from: ALICE, to: [BOB] } as FmsgMessage, ALICE)).not.toContain("unread");
+    expect(messageLine({ ...base, from: BOB, to: [ALICE] } as FmsgMessage, ALICE)).toContain("unread");
   });
 });

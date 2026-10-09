@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `get_message` text gives the decoded body size next to the stored size for a compressed body
+  ("1002 bytes; 587 stored, sent compressed"), so the stored size is never mistaken for the body's.
+- `list_messages` text marks messages you sent to yourself as unread when they are.
+- `mark_read` describes `ids`; `resolve_address` and `download_attachment` descriptions are shorter.
+
 - Tools reject unknown arguments instead of ignoring them, so a misspelled parameter (`unread` for
   `unread_only`) fails with the name rather than returning a plausible wrong answer.
 - Server instructions define fmsg's terms (topics on the first message only, reactions, terminal,

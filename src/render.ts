@@ -87,17 +87,23 @@ export function sortAttachments<T extends { filename: string }>(attachments: rea
   return [...(attachments ?? [])].sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0));
 }
 
-/** "N bytes", noting when the body was sent compressed (see SIZE_DESCRIPTION for what N then is). */
-export function sizeText(size: number | undefined, compressed: boolean | undefined): string {
-  return `${size ?? 0} bytes${compressed ? ", sent compressed" : ""}`;
+/**
+ * "N bytes" for the body. A compressed body's stored size may be the compressed length (see SIZE_DESCRIPTION), so
+ * name both when the decoded length is known.
+ */
+export function sizeText(size: number | undefined, compressed: boolean | undefined, bodyBytes?: number): string {
+  if (!compressed) return `${bodyBytes ?? size ?? 0} bytes`;
+  return bodyBytes === undefined
+    ? `${size ?? 0} bytes stored, sent compressed`
+    : `${bodyBytes} bytes; ${size ?? 0} stored, sent compressed`;
 }
 
 /** `threadTopic`: for a reply, its thread root's topic, shown after the parent id. */
-export function renderMessage(message: FmsgMessage, body: string | null, threadTopic?: string | null): string {
+export function renderMessage(message: FmsgMessage, body: string | null, threadTopic?: string | null, bodyBytes?: number): string {
   const content = body === null
     ? `[non-text body: ${headerValue(message.type ?? "?")}, ${sizeText(message.size, message.deflate)}]`
     : `Body:\n${fence(body)}`;
-  return `${DATA_NOT_INSTRUCTIONS}\n\n${messageHeader(message, threadTopic)}\n\n${content}\n\nEnd of message data.`;
+  return `${DATA_NOT_INSTRUCTIONS}\n\n${messageHeader(message, threadTopic, bodyBytes)}\n\n${content}\n\nEnd of message data.`;
 }
 
 /** All addresses that participate in a message (sender, recipients, add-to batches). */
@@ -138,7 +144,9 @@ export function messageLine(message: FmsgMessage, self?: string): string {
   if (message.no_reply) flags.push("no-reply");
   if (message.terminal) flags.push("terminal");
   if (typeof message.reaction === "string") flags.push(`reaction ${headerValue(message.reaction) || "(cleared)"}`);
-  if (message.read === false && message.from.toLowerCase() !== self?.toLowerCase()) flags.push("unread");
+  // Your own messages are never unread, unless you were also a recipient.
+  const toSelf = [...message.to, ...(message.add_to ?? []).flatMap((b) => b.to ?? [])].some((a) => a.toLowerCase() === self?.toLowerCase());
+  if (message.read === false && (toSelf || message.from.toLowerCase() !== self?.toLowerCase())) flags.push("unread");
   if (flags.length) parts.push(flags.join(" "));
   const n = message.attachments?.length ?? 0;
   if (n) parts.push(`${n} attachment${n === 1 ? "" : "s"}`);
@@ -147,7 +155,7 @@ export function messageLine(message: FmsgMessage, self?: string): string {
   return `- ${parts.join(" · ")}${p ? `\n  ${p}` : ""}`;
 }
 
-export function messageHeader(message: FmsgMessage, threadTopic?: string | null): string {
+export function messageHeader(message: FmsgMessage, threadTopic?: string | null, bodyBytes?: number): string {
   const lines = [
     `**Message ${message.id}**`,
     `From: ${addressText(message.from)}`,
@@ -160,7 +168,7 @@ export function messageHeader(message: FmsgMessage, threadTopic?: string | null)
   if (message.topic) lines.push(`Topic: ${headerValue(message.topic)}`);
   if (message.pid) lines.push(`Reply to: ${message.pid}`);
   if (message.pid && threadTopic) lines.push(`Thread topic: ${headerValue(threadTopic)}`);
-  lines.push(`Type: ${headerValue(message.type ?? "?")} (${sizeText(message.size, message.deflate)})`);
+  lines.push(`Type: ${headerValue(message.type ?? "?")} (${sizeText(message.size, message.deflate, bodyBytes)})`);
   const flags: string[] = [];
   if (message.important) flags.push("important");
   if (message.no_reply) flags.push("no-reply");
