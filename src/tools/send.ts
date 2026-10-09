@@ -2,7 +2,7 @@ import * as z from "zod/v4";
 import { resolveAddresses, sameAddress } from "../address.js";
 import type { OutboundAttachment } from "../client/types.js";
 import { toolError } from "../errors.js";
-import { attachmentType, isoTime, participantsOf } from "../render.js";
+import { addressList, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 
 const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
@@ -13,9 +13,9 @@ const attachmentInput = z.object({
   content_type: z.string().optional(),
 });
 
-/** Sent attachments with the type each was given, or the one its filename implies. */
+/** Sent attachments with the type each was given, or the one its filename implies, in the order every tool lists them. */
 function sentAttachments(sent: Array<{ filename: string; size: number }>, outbound: OutboundAttachment[]) {
-  return sent.map((a, i) => ({ ...a, type: attachmentType(a.filename, outbound[i]?.contentType) }));
+  return sortAttachments(sent.map((a, i) => ({ ...a, type: attachmentType(a.filename, outbound[i]?.contentType) })));
 }
 
 function decodeAttachments(items: z.infer<typeof attachmentInput>[] | undefined): OutboundAttachment[] {
@@ -33,9 +33,12 @@ const sentOutput = outputObject({
   to: z.array(z.string()),
   topic: z.string(),
   parent_id: z.string().nullable(),
-  attachments: z.array(attachmentItem),
+  attachments: z.array(attachmentItem).describe("sorted by filename, the same order in every tool"),
   redactions: z.number().describe("secrets replaced with placeholders before sending"),
   warnings: z.array(z.string()),
+  thread_topic: z.string().nullable().optional().describe(
+    "the thread's topic: the topic sent for a new message; for a reply, the parent's topic when the parent is the thread root, otherwise null (get_thread reports it)",
+  ),
 });
 
 export const registerSendTools: Register = (server, deps) => {
@@ -84,9 +87,10 @@ export const registerSendTools: Register = (server, deps) => {
           attachments: sentAttachments(sent.attachments, outbound),
           redactions: sent.redactions,
           warnings: [] as string[],
+          thread_topic: sent.topic,
         };
-        const text = `Sent message ${sent.id} "${sent.topic}" to ${recipients.join(", ")} at ${structured.time ?? "?"}` +
-          (sent.attachments.length ? ` with ${sent.attachments.map((a) => a.filename).join(", ")}` : "") +
+        const text = `Sent message ${sent.id} "${sent.topic}" to ${addressList(recipients)} at ${structured.time ?? "?"}` +
+          (structured.attachments.length ? ` with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
           (structured.redactions ? `. ${structured.redactions} secret(s) were redacted before sending.` : ".");
         return ok(text, structured);
       }),
@@ -147,8 +151,11 @@ export const registerSendTools: Register = (server, deps) => {
           attachments: sentAttachments(sent.attachments, outbound),
           redactions: sent.redactions,
           warnings,
+          // Topics live only on a thread's root; a deeper parent would need another lookup.
+          thread_topic: parent.pid ? null : (parent.topic ?? ""),
         };
-        const text = `Sent reply ${sent.id} to message ${parent.id} for ${to.join(", ")} at ${structured.time ?? "?"}` +
+        const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
+        const text = `Sent reply ${sent.id} to message ${parent.id}${topic} for ${addressList(to)} at ${structured.time ?? "?"}` +
           (structured.redactions ? `. ${structured.redactions} secret(s) were redacted before sending.` : ".");
         return ok(text, structured);
       }),
@@ -179,7 +186,7 @@ export const registerSendTools: Register = (server, deps) => {
       return withCaller(deps, ctx, async (caller, signal) => {
         const addresses = resolveAddresses((recipients ?? add_to)!, resolverFor(deps, caller));
         const result = await caller.client.addRecipients(id, addresses, signal);
-        return ok(`Added ${result.added} recipient(s) to message ${id}: ${addresses.join(", ")}`, { ...result, recipients: addresses, add_to: addresses });
+        return ok(`Added ${result.added} recipient(s) to message ${id}: ${addressList(addresses)}`, { ...result, recipients: addresses, add_to: addresses });
       });
     },
   );

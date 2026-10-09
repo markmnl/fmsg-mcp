@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- `wait_for_message` no longer lets a model step past an unread message silently. Messages on other
+  threads that arrive while a batch settles are not returned and `after_id` moves past them, as
+  before; now `next` (and the text) names each one first ("Also new and not included here: message
+  40 in another thread … read it with get_thread (or get_message) "40" … before waiting again"),
+  and results add `pending_ids`. The cursor is not held back, which would replay the returned batch.
+- `get_thread` says it returns one lineage: results add `scope: "lineage"`, the description and
+  `next` say other replies in the thread (siblings and other branches) are not included and that
+  `list_messages` shows newer messages, and `complete` is described as the lineage being complete.
+  The Web API's thread routes return only the lineage, so other replies are not listed.
+- Thread messages add `no_reply`, `terminal`, `important`, `added` and `compressed`, and results add
+  the target's `no_reply`. `next` never suggests replying to a terminal message (no replies are
+  possible) or a no-reply one (the sender asked for none; `reply` refuses unless `allow_no_reply`).
+- Addresses in text results are code spans instead of Markdown-escaped text, so a model copying
+  `@bob_mcp@example.com` no longer gets `@bob\_mcp@example.com`. Address validation follows the
+  fmsg specification's user-part rule (letters and digits with single `.`, `_` or `-` between them)
+  and rejects backslashes, spaces and control characters, with a hint about Markdown escaping.
+- `size` is described as the size on the wire (the compressed length when `compressed` is true), and
+  message items add `compressed`.
+- Redaction covers more credential formats: cloud access key ids (`AKIA…`, `ASIA…`, including the
+  widely published documentation example) and 40-character secret access keys next to their usual
+  label, `gho_`/`ghs_`/`ghu_` and other source-hosting tokens (`glpat-…`), chat-platform tokens
+  (`xox…`, `xapp-…`), `AIza…` API keys, payment-platform keys (`sk_live_…`, `rk_live_…`,
+  `sk_test_…`, `whsec_…`) and `PGP PRIVATE KEY BLOCK`s. Ordinary text is left alone.
+- `download_attachment` and `save_attachment` add `type` (the same value as `content_type`). A
+  filename the message does not have now says so and lists the message's attachments instead of
+  suggesting the message may not be visible.
+- Attachments are listed in one order (by filename) by every tool, including send results.
+- `delivery_status` describes received messages (the host's own receipt records, often with code
+  null) and what `via` means.
+- `get_message` adds `thread_topic` (one thread lookup, only for replies) and shows it in the text;
+  `send_message` and `reply` results add `thread_topic` when it is known without another request.
+
 - Tool output schemas are open and additive, so hosts that cache a tool's `outputSchema` when the
   connector is added keep validating results after upgrades. Every output object, at every depth,
   accepts unknown properties (no `additionalProperties: false`); values that may grow (statuses,

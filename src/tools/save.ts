@@ -4,7 +4,7 @@ import path from "node:path";
 import * as z from "zod/v4";
 import { normalizeMessageId } from "../client/message-id.js";
 import { messageData } from "../render.js";
-import { idSchema, ok, outputObject, type Register, UNTRUSTED, untrustedNotice, withCaller } from "./common.js";
+import { idSchema, missingAttachment, ok, outputObject, type Register, UNTRUSTED, untrustedNotice, withCaller } from "./common.js";
 
 /** Produce one portable leaf name, even for unusual upstream filenames. */
 function localName(id: string, filename: string): string {
@@ -23,11 +23,19 @@ export const registerSaveTool: Register = (server, deps) => {
       "Creates a new file named from its message id and filename, adding -1, -2, etc. for repeat saves; never overwrites. No destination path is accepted. " +
       "Returns the saved path and byte count. Available only in stdio when a download folder is configured.",
     inputSchema: z.strictObject({ id: idSchema, filename: z.string().min(1).regex(/^[^/\\\u0000]+$/u, "use an attachment filename without directory components") }),
-    outputSchema: outputObject({ id: z.string(), filename: z.string(), saved_to: z.string(), size: z.number(), content_type: z.string(), ...untrustedNotice }),
+    outputSchema: outputObject({ id: z.string(), filename: z.string(), saved_to: z.string(), size: z.number(), content_type: z.string(),
+      type: z.string().optional().describe("media type, the same value as content_type"), ...untrustedNotice }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ id, filename }, ctx) => withCaller(deps, ctx, async (caller, signal) => {
     const mid = normalizeMessageId(id);
-    const { stream, contentType } = await caller.client.streamAttachment(mid, filename, signal);
+    let opened;
+    try { opened = await caller.client.streamAttachment(mid, filename, signal); }
+    catch (error) {
+      const missing = await missingAttachment(caller, mid, filename, error, signal);
+      if (missing) return missing;
+      throw error;
+    }
+    const { stream, contentType } = opened;
     const reader = stream.getReader();
     let file: Awaited<ReturnType<typeof open>> | undefined;
     let target: string | undefined;
@@ -63,7 +71,8 @@ export const registerSaveTool: Register = (server, deps) => {
       await file.close();
       complete = true;
       return ok(`Saved attachment (${size} bytes).\n\n${messageData(`Filename: ${filename}\nSaved to: ${target}`)}`, {
-        id: mid, filename, saved_to: target, size, content_type: contentType ?? "application/octet-stream", ...UNTRUSTED,
+        id: mid, filename, saved_to: target, size, content_type: contentType ?? "application/octet-stream",
+        type: contentType ?? "application/octet-stream", ...UNTRUSTED,
       });
     } finally {
       await reader.cancel().catch(() => undefined);

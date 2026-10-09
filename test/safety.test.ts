@@ -8,6 +8,7 @@ import { ApiKeyCallerProvider } from "../src/auth.js";
 import { FmsgClient, FmsgHttpError } from "../src/client/client.js";
 import { loadConfig } from "../src/config.js";
 import { StaticCallerProvider } from "../src/context.js";
+import { redactSecrets } from "../src/client/redact.js";
 import { describeError, toolError } from "../src/errors.js";
 import { DATA_NOT_INSTRUCTIONS } from "../src/render.js";
 import { waitForMessage } from "../src/wait.js";
@@ -223,6 +224,78 @@ describe("upstream URL boundary", () => {
     expect(() => new FmsgClient("http://127.0.0.1:8000", env.FMSG_API_KEY)).not.toThrow();
     for (const url of ["https://user:secret@api.example.com", "https://api.example.com?token=secret", "https://api.example.com#secret"]) {
       expect(() => new FmsgClient(url, env.FMSG_API_KEY)).toThrow("must not contain");
+    }
+  });
+});
+
+describe("redactSecrets", () => {
+  // Published documentation examples and obviously fake values in each format, assembled at run time so the
+  // source never holds a token-shaped literal that repository secret scanning would flag.
+  const token = (...parts: string[]) => parts.join("");
+  const secrets: Array<[string, string]> = [
+    ["AKIAIOSFODNN7EXAMPLE", "[REDACTED_ACCESS_KEY_ID]"],
+    [token("ASIA", "FAKEKEY0EXAMPLE1"), "[REDACTED_ACCESS_KEY_ID]"],
+    [`ghp_${"a1B2".repeat(9)}`, "[REDACTED_GITHUB_TOKEN]"],
+    [`gho_${"Z9y8".repeat(9)}`, "[REDACTED_GITHUB_TOKEN]"],
+    [`ghs_${"q".repeat(36)}`, "[REDACTED_GITHUB_TOKEN]"],
+    [`ghu_${"Q".repeat(36)}`, "[REDACTED_GITHUB_TOKEN]"],
+    [token("github", "_pat_", "x".repeat(70)), "[REDACTED_GITHUB_TOKEN]"],
+    [token("gl", "pat-", "x".repeat(20)), "[REDACTED_ACCESS_TOKEN]"],
+    [token("xox", "b-", "1".repeat(12), "-", "2".repeat(13), "-", "fake".repeat(6)), "[REDACTED_CHAT_TOKEN]"],
+    [token("xox", "p-", "3".repeat(12), "-", "4".repeat(12), "-", "fake".repeat(8)), "[REDACTED_CHAT_TOKEN]"],
+    [token("AI", "za", "Fake-Key_".padEnd(35, "x")), "[REDACTED_API_KEY]"],
+    [token("sk", "_live_", "Fake".repeat(6)), "[REDACTED_API_KEY]"],
+    [token("rk", "_live_", "Fake".repeat(6)), "[REDACTED_API_KEY]"],
+    [token("sk", "_test_", "Fake".repeat(6)), "[REDACTED_API_KEY]"],
+    [token("wh", "sec_", "Fake".repeat(8)), "[REDACTED_API_KEY]"],
+    ["-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]"],
+    ["-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]"],
+    ["-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF\n-----END PGP PRIVATE KEY BLOCK-----", "[REDACTED_PRIVATE_KEY]"],
+    ["eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl", "[REDACTED_JWT]"],
+  ];
+
+  it.each(secrets)("redacts %s", (secret, placeholder) => {
+    const result = redactSecrets(`config: ${secret} end`);
+    expect(result).toEqual({ text: `config: ${placeholder} end`, count: 1 });
+  });
+
+  it("redacts a secret access key next to its label but keeps the label", () => {
+    const key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    for (const [input, output] of [
+      [`aws_secret_access_key = ${key}`, "aws_secret_access_key = [REDACTED_SECRET_ACCESS_KEY]"],
+      [`AWS_SECRET_ACCESS_KEY=${key}`, "AWS_SECRET_ACCESS_KEY=[REDACTED_SECRET_ACCESS_KEY]"],
+      [`{"SecretAccessKey": "${key}"}`, '{"SecretAccessKey": "[REDACTED_SECRET_ACCESS_KEY]"}'],
+    ]) expect(redactSecrets(input!)).toEqual({ text: output, count: 1 });
+    // The same 40 characters without a label are not distinctive enough to redact.
+    expect(redactSecrets(`checksum ${key}`).count).toBe(0);
+  });
+
+  it("leaves ordinary text alone", () => {
+    const ordinary = [
+      "Meet in the ASIA region office; AKIA is not a key on its own.",
+      "THE QUICK BROWN FOX JUMPS OVER AKIALAZY.",
+      "risk_test_plan, skip_live_events, task_live_now and desk_test_one",
+      "ghp_short gho_ and github_pat_ are prefixes only",
+      "xoxo-hugs and xox are not tokens; AIza is a prefix",
+      "The secret access key is rotated monthly; see aws_secret_access_key in the docs.",
+      "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----",
+      "@bob_mcp@example.org wrote: sk_ and rk_ prefixes, version 1.2.3, id 1234567890123456",
+    ].join("\n");
+    expect(redactSecrets(ordinary)).toEqual({ text: ordinary, count: 0 });
+  });
+
+  it("reports redactions on sent messages", async () => {
+    const fake = new FakeFmsgServer();
+    await fake.start();
+    const h = await connectInMemory(fake);
+    try {
+      const result = await call(h.client, "send_message", { to: [BOB], topic: "keys", body: "id AKIAIOSFODNN7EXAMPLE and ghp_" + "a".repeat(36) });
+      expect(result.structuredContent).toMatchObject({ redactions: 2 });
+      const stored = [...fake.messages.values()].find((m) => m.topic === "keys")!;
+      expect(stored.data.toString()).toBe("id [REDACTED_ACCESS_KEY_ID] and [REDACTED_GITHUB_TOKEN]");
+    } finally {
+      await h.close();
+      await fake.stop();
     }
   });
 });

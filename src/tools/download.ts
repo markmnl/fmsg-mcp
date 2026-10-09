@@ -1,9 +1,8 @@
 import * as z from "zod/v4";
 import { attachmentDownloadUrl, attachmentFilename, downloadBaseUrl } from "../download.js";
 import { normalizeMessageId } from "../client/message-id.js";
-import { toolError } from "../errors.js";
 import { attachmentType, messageData } from "../render.js";
-import { idSchema, openEnum, outputObject, READ_ONLY, type Register, UNTRUSTED, untrustedNotice, withCaller } from "./common.js";
+import { attachmentMissingFrom, idSchema, openEnum, outputObject, READ_ONLY, type Register, UNTRUSTED, untrustedNotice, withCaller } from "./common.js";
 
 const FALLBACK = "If you cannot fetch URLs with this connection's authorization, use download_attachment instead.";
 
@@ -33,7 +32,7 @@ export const registerDownloadTool: Register = (server, deps) => {
     attachmentFilename(filename);
     const message = await caller.client.getMessage(mid, signal);
     const attachment = message.attachments?.find(a => a.filename === filename);
-    if (!attachment) return toolError("Attachment not found on this message.");
+    if (!attachment) return attachmentMissingFrom(message, filename)!;
     const url = attachmentDownloadUrl(baseUrl, mid, filename);
     const type = attachmentType(filename);
     return {

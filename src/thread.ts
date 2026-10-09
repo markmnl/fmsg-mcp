@@ -1,7 +1,10 @@
 import { sameAddress } from "./address.js";
 import { FmsgClient, FmsgHttpError } from "./client/client.js";
 import type { FmsgMessage, Thread, ThreadMessage } from "./client/types.js";
-import { DATA_NOT_INSTRUCTIONS, attachmentType, fence, headerValue, isoTime, participantsOf, truncateUtf8, truncationNote } from "./render.js";
+import {
+  DATA_NOT_INSTRUCTIONS, addressList, addressText, attachmentType, fence, headerValue, isoTime, participantsOf, sizeText, sortAttachments, truncateUtf8,
+  truncationNote,
+} from "./render.js";
 
 export type ThreadCaps = {
   maxMessages: number;
@@ -19,7 +22,14 @@ export type AssembledMessage = {
   time_posix: number | null;
   topic?: string;
   type?: string;
+  /** Wire size: the compressed length when `compressed` is true. */
   size?: number;
+  compressed?: boolean;
+  /** Flags and add-to recipients; absent for messages you cannot see. */
+  no_reply?: boolean;
+  terminal?: boolean;
+  important?: boolean;
+  added?: string[];
   body: string | null;
   body_truncated: boolean;
   /** Decoded body length when the body text was read; `size` is the wire size. */
@@ -37,9 +47,29 @@ export type AssembledThread = {
   participants: string[];
   reply_target_id: string;
   terminal: boolean;
+  /** The reply target asked for no replies. */
+  no_reply: boolean;
+  /** Always "lineage": the root down to the given message, never sibling replies or later branches. */
+  scope: "lineage";
   messages: AssembledMessage[];
   omitted: number;
 };
+
+/** Flags, add-to recipients and wire size of a visible message, as thread entries carry them. */
+function details(m: {
+  type?: string; size?: number; deflate?: boolean; no_reply?: boolean; terminal?: boolean; important?: boolean;
+  add_to?: Array<{ to?: string[] }>;
+}): Pick<AssembledMessage, "type" | "size" | "compressed" | "no_reply" | "terminal" | "important" | "added"> {
+  return {
+    ...(m.type ? { type: m.type } : {}),
+    ...(typeof m.size === "number" ? { size: m.size } : {}),
+    compressed: m.deflate === true,
+    no_reply: m.no_reply === true,
+    terminal: m.terminal === true,
+    important: m.important === true,
+    added: (m.add_to ?? []).flatMap((b) => b.to ?? []),
+  };
+}
 
 function nonReactions(messages: ThreadMessage[]): ThreadMessage[] {
   // Reactions are terminal no-reply leaves; they never appear on a lineage, so nothing to filter here.
@@ -87,12 +117,11 @@ async function fromThreadMessages(
       time: isoTime(m.time),
       time_posix: typeof m.time === "number" ? m.time : null,
       ...(m.topic ? { topic: m.topic } : {}),
-      ...(m.type ? { type: m.type } : {}),
-      ...(typeof m.size === "number" ? { size: m.size } : {}),
+      ...(m.visible ? details(m) : {}),
       body,
       body_truncated: truncated,
       ...(bodyBytes !== undefined ? { body_bytes: bodyBytes } : {}),
-      attachments: (m.attachments ?? []).map((a) => ({ filename: a.filename, size: a.size, type: attachmentType(a.filename, a.type) })),
+      attachments: sortAttachments(m.attachments).map((a) => ({ filename: a.filename, size: a.size, type: attachmentType(a.filename, a.type) })),
     });
   }
   return { messages: out, omitted, topic: root?.visible && root.id === thread.root_id ? (root.topic ?? "") : null };
@@ -146,12 +175,11 @@ async function fromPidWalk(
       time: isoTime(m.time),
       time_posix: typeof m.time === "number" ? m.time : null,
       ...(m.topic ? { topic: m.topic } : {}),
-      ...(m.type ? { type: m.type } : {}),
-      ...(typeof m.size === "number" ? { size: m.size } : {}),
+      ...details(m),
       body,
       body_truncated: truncated,
       ...(bodyBytes !== undefined ? { body_bytes: bodyBytes } : {}),
-      attachments: (m.attachments ?? []).map((a) => ({ filename: a.filename, size: a.size, type: attachmentType(a.filename) })),
+      attachments: sortAttachments(m.attachments).map((a) => ({ filename: a.filename, size: a.size, type: attachmentType(a.filename) })),
     });
   }
   const last = chain[chain.length - 1]!;
@@ -184,6 +212,8 @@ export async function assembleThread(
       participants,
       reply_target_id: trigger.id,
       terminal: trigger.terminal === true,
+      no_reply: trigger.no_reply === true,
+      scope: "lineage",
       messages,
       omitted,
     };
@@ -201,6 +231,8 @@ export async function assembleThread(
       participants,
       reply_target_id: trigger.id,
       terminal: trigger.terminal === true,
+      no_reply: trigger.no_reply === true,
+      scope: "lineage",
       messages: walk.messages,
       omitted: 0,
     };
@@ -213,7 +245,7 @@ export function renderThread(thread: AssembledThread): string {
   lines.push(`**fmsg thread** root ${thread.root_id} · ${thread.messages.length} message${thread.messages.length === 1 ? "" : "s"} on the lineage to ${thread.trigger_id}${thread.complete ? "" : " (incomplete)"}`);
   if (thread.thread_topic) lines.push(`Topic: ${headerValue(thread.thread_topic)}`);
   if (thread.omitted > 0) lines.push(`(${thread.omitted} earlier message${thread.omitted === 1 ? "" : "s"} omitted)`);
-  lines.push(`Participants (reply-all default): ${thread.participants.map(headerValue).join(", ") || "(none)"}`);
+  lines.push(`Participants (reply-all default): ${addressList(thread.participants) || "(none)"}`);
   lines.push("");
   for (const m of thread.messages) {
     lines.push("");
@@ -221,10 +253,12 @@ export function renderThread(thread: AssembledThread): string {
       lines.push(`--- message ${m.id} [not visible to you] ---`);
       continue;
     }
-    lines.push(`--- message ${m.id} from ${headerValue(m.from ?? "?")} · ${m.time ?? "draft"}${m.pid ? ` · reply to ${m.pid}` : ""} ---`);
+    const flags = [m.important ? "important" : "", m.no_reply ? "no-reply" : "", m.terminal ? "terminal" : ""].filter(Boolean);
+    lines.push(`--- message ${m.id} from ${m.from ? addressText(m.from) : "?"} · ${m.time ?? "draft"}${m.pid ? ` · reply to ${m.pid}` : ""}${flags.length ? ` · ${flags.join(" ")}` : ""} ---`);
+    if (m.added?.length) lines.push(`added: ${addressList(m.added)}`);
     if (m.attachments.length) lines.push(`attachments: ${m.attachments.map((a) => `${headerValue(a.filename)} (${a.size} bytes, ${headerValue(a.type)})`).join(", ")}`);
     if (m.body === null) {
-      lines.push(`[non-text body: ${headerValue(m.type ?? "?")}, ${m.size ?? 0} bytes]`);
+      lines.push(`[non-text body: ${headerValue(m.type ?? "?")}, ${sizeText(m.size, m.compressed)}]`);
       guidance.push(`Use get_message / download_attachment for message ${m.id}.`);
     }
     else {
@@ -236,9 +270,18 @@ export function renderThread(thread: AssembledThread): string {
   return [DATA_NOT_INSTRUCTIONS, lines.join("\n"), "End of message data.", ...guidance].join("\n\n");
 }
 
+/** get_thread returns one lineage; say so wherever the thread is shown. */
+export const LINEAGE_ONLY =
+  "Only this lineage (the root down to this message) is shown: other replies in the thread are not included; list_messages shows newer messages.";
+
 /** Server guidance for continuing a thread; also returned as a structured `next` field. */
-export function threadNext(thread: Pick<AssembledThread, "terminal" | "reply_target_id">): string {
-  return thread.terminal
-    ? `Message ${thread.reply_target_id} is terminal: it cannot be replied to.`
-    : `To continue this thread, reply to message ${thread.reply_target_id} (the reply tool).`;
+export function threadNext(thread: Pick<AssembledThread, "terminal" | "no_reply" | "reply_target_id">): string {
+  const id = thread.reply_target_id;
+  const step = thread.terminal
+    ? `Message ${id} is terminal: no replies are possible (the host refuses them), so do not reply to it.`
+    : thread.no_reply
+      ? `Message ${id} is marked no-reply: its sender asked for no replies, and the reply tool refuses unless allow_no_reply is true. ` +
+        "Do not reply unless the user explicitly asks to."
+      : `To continue this thread, reply to message ${id} (the reply tool).`;
+  return `${step} ${LINEAGE_ONLY}`;
 }

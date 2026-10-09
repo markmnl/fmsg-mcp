@@ -63,11 +63,41 @@ export function headerValue(value: string): string {
     .replace(/[\\`*_{}\[\]()<>|]/gu, "\\$&");
 }
 
-export function renderMessage(message: FmsgMessage, body: string | null): string {
+/**
+ * An address for Markdown text: in a code span, so nothing inside is escaped and a model can copy it exactly
+ * (`@bob_x@example.com`, never `@bob\_x@example.com`). Values a code span cannot hold safely fall back to
+ * escaped header text.
+ */
+export function addressText(address: string): string {
+  return /^@[^\s`\\@]+@[^\s`\\@]+$/u.test(address) && !/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(address)
+    ? `\`${address}\``
+    : headerValue(address);
+}
+
+/** Addresses as a comma-separated list for Markdown text. */
+export function addressList(addresses: readonly string[]): string {
+  return addresses.map(addressText).join(", ");
+}
+
+/**
+ * Attachments in one order everywhere (by filename). The Web API reports the wire position only on thread
+ * entries, and messages sent through it share one position, so filename order is the order its hosts send in.
+ */
+export function sortAttachments<T extends { filename: string }>(attachments: readonly T[] | undefined): T[] {
+  return [...(attachments ?? [])].sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0));
+}
+
+/** "N bytes", noting when that is the compressed wire size. */
+export function sizeText(size: number | undefined, compressed: boolean | undefined): string {
+  return `${size ?? 0} bytes${compressed ? " compressed" : ""}`;
+}
+
+/** `threadTopic`: for a reply, its thread root's topic, shown after the parent id. */
+export function renderMessage(message: FmsgMessage, body: string | null, threadTopic?: string | null): string {
   const content = body === null
-    ? `[non-text body: ${headerValue(message.type ?? "?")}, ${message.size ?? 0} bytes${message.deflate ? " compressed" : ""}]`
+    ? `[non-text body: ${headerValue(message.type ?? "?")}, ${sizeText(message.size, message.deflate)}]`
     : `Body:\n${fence(body)}`;
-  return `${DATA_NOT_INSTRUCTIONS}\n\n${messageHeader(message)}\n\n${content}\n\nEnd of message data.`;
+  return `${DATA_NOT_INSTRUCTIONS}\n\n${messageHeader(message, threadTopic)}\n\n${content}\n\nEnd of message data.`;
 }
 
 /** All addresses that participate in a message (sender, recipients, add-to batches). */
@@ -97,7 +127,7 @@ export function preview(message: FmsgMessage, maxChars = 200): string {
 
 /** One list line per message. */
 export function messageLine(message: FmsgMessage, self?: string): string {
-  const who = message.from.toLowerCase() === self?.toLowerCase() ? `to ${message.to.join(", ")}` : `from ${message.from}`;
+  const who = message.from.toLowerCase() === self?.toLowerCase() ? `to ${addressList(message.to)}` : `from ${addressText(message.from)}`;
   const parts: string[] = [`**${message.id}** ${who}`];
   const time = isoTime(message.time);
   parts.push(time ?? "draft");
@@ -117,29 +147,30 @@ export function messageLine(message: FmsgMessage, self?: string): string {
   return `- ${parts.join(" · ")}${p ? `\n  ${p}` : ""}`;
 }
 
-export function messageHeader(message: FmsgMessage): string {
+export function messageHeader(message: FmsgMessage, threadTopic?: string | null): string {
   const lines = [
     `**Message ${message.id}**`,
-    `From: ${headerValue(message.from)}`,
-    `To: ${message.to.map(headerValue).join(", ") || "(none)"}`,
+    `From: ${addressText(message.from)}`,
+    `To: ${addressList(message.to) || "(none)"}`,
   ];
   for (const batch of message.add_to ?? []) {
-    lines.push(`Added by ${headerValue(batch.add_to_from ?? "?")}: ${(batch.to ?? []).map(headerValue).join(", ")}`);
+    lines.push(`Added by ${batch.add_to_from ? addressText(batch.add_to_from) : "?"}: ${addressList(batch.to ?? [])}`);
   }
   lines.push(`Time: ${isoTime(message.time) ?? "draft"}`);
   if (message.topic) lines.push(`Topic: ${headerValue(message.topic)}`);
   if (message.pid) lines.push(`Reply to: ${message.pid}`);
-  lines.push(`Type: ${headerValue(message.type ?? "?")} (${message.size ?? 0} bytes${message.deflate ? " compressed" : ""})`);
+  if (message.pid && threadTopic) lines.push(`Thread topic: ${headerValue(threadTopic)}`);
+  lines.push(`Type: ${headerValue(message.type ?? "?")} (${sizeText(message.size, message.deflate)})`);
   const flags: string[] = [];
   if (message.important) flags.push("important");
   if (message.no_reply) flags.push("no-reply");
   if (message.terminal) flags.push("terminal");
   if (flags.length) lines.push(`Flags: ${flags.join(", ")}`);
   if (message.attachments?.length) {
-    lines.push(`Attachments: ${message.attachments.map((a) => `${headerValue(a.filename)} (${a.size} bytes, ${headerValue(attachmentType(a.filename))})`).join(", ")}`);
+    lines.push(`Attachments: ${sortAttachments(message.attachments).map((a) => `${headerValue(a.filename)} (${a.size} bytes, ${headerValue(attachmentType(a.filename))})`).join(", ")}`);
   }
   if (message.reactions?.length) {
-    lines.push(`Reactions: ${message.reactions.map((r) => `${headerValue(r.emoji)} ${r.from.map(headerValue).join(", ")}`).join("; ")}`);
+    lines.push(`Reactions: ${message.reactions.map((r) => `${headerValue(r.emoji)} ${addressList(r.from)}`).join("; ")}`);
   }
   return lines.join("\n");
 }

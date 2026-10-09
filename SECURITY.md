@@ -19,7 +19,8 @@ rather than a public issue.
   WebSocket announcements trigger protected message reads before their content reaches the host.
   The upstream contract authenticates sockets at handshake; it does not promise immediate closure
   of existing sockets on revocation. MCP does not infer ongoing authorization from a socket alone.
-- Selected key/JWT/private-key patterns are redacted from outbound message bodies, topics and errors.
+- Selected credential formats (API keys and tokens with distinctive prefixes, labelled secret access
+  keys, JWTs and private key blocks) are redacted from outbound message bodies, topics and errors.
   This does not detect arbitrary sensitive information or scan binary attachments.
 - Message bodies and upstream error text are fenced as untrusted data. Each message body has its own
   fence; server-built headers stay outside it, with external header values escaped onto one line.
