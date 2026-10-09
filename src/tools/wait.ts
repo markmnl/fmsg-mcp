@@ -3,7 +3,7 @@ import { resolveAddress } from "../address.js";
 import { assembleThread, renderThread } from "../thread.js";
 import { DATA_NOT_INSTRUCTIONS, fence, headerValue, messageData, messageLine } from "../render.js";
 import { waitForMessage } from "../wait.js";
-import { READ_ONLY, type Register, idSchema, messageItem, ok, toItem, withCaller } from "./common.js";
+import { READ_ONLY, type Register, idSchema, messageItem, ok, resolverFor, toItem, withCaller } from "./common.js";
 
 export const registerWaitTools: Register = (server, deps) => {
   const maxWait = deps.config.waitMaxSeconds;
@@ -56,7 +56,7 @@ export const registerWaitTools: Register = (server, deps) => {
           {
             ...(after_id !== undefined ? { afterId: after_id } : {}),
             ...(thread_of !== undefined ? { threadOf: thread_of } : {}),
-            ...(from !== undefined ? { from: resolveAddress(from, deps.config).address } : {}),
+            ...(from !== undefined ? { from: resolveAddress(from, resolverFor(deps, caller)).address } : {}),
             timeoutMs: timeout_seconds * 1000,
             settleMs: settle_seconds * 1000,
             onTick: (elapsed) => {

@@ -3,7 +3,7 @@ import { resolveAddresses, sameAddress } from "../address.js";
 import type { OutboundAttachment } from "../client/types.js";
 import { toolError } from "../errors.js";
 import { isoTime, participantsOf } from "../render.js";
-import { READ_ONLY, SENDS, type Register, idSchema, ok, withCaller } from "./common.js";
+import { READ_ONLY, SENDS, type Register, idSchema, ok, resolverFor, withCaller } from "./common.js";
 
 const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
@@ -57,7 +57,7 @@ export const registerSendTools: Register = (server, deps) => {
     },
     async ({ to, topic, body, type, important, no_reply, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
-        const recipients = resolveAddresses(to, deps.config);
+        const recipients = resolveAddresses(to, resolverFor(deps, caller));
         const sent = await caller.client.send({
           to: recipients,
           topic,
@@ -117,7 +117,7 @@ export const registerSendTools: Register = (server, deps) => {
         }
         const warnings: string[] = [];
         const to = recipients?.length
-          ? resolveAddresses(recipients, deps.config)
+          ? resolveAddresses(recipients, resolverFor(deps, caller))
           : participantsOf(parent).filter((a) => !sameAddress(a, caller.address));
         if (to.length === 0) return toolError(`message ${id} has no other participants to reply to; pass recipients`);
         const sent = await caller.client.send({
@@ -163,7 +163,7 @@ export const registerSendTools: Register = (server, deps) => {
     },
     async ({ id, add_to }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
-        const addresses = resolveAddresses(add_to, deps.config);
+        const addresses = resolveAddresses(add_to, resolverFor(deps, caller));
         const result = await caller.client.addRecipients(id, addresses, signal);
         return ok(`Added ${result.added} recipient(s) to message ${id}: ${addresses.join(", ")}`, { ...result, add_to: addresses });
       }),

@@ -1,7 +1,7 @@
 import * as z from "zod/v4";
-import { resolveAddress } from "../address.js";
+import { type AddressResolver, CALLER_DOMAIN, effectiveDefaultDomain, resolveAddress } from "../address.js";
 import { isoTime } from "../render.js";
-import { READ_ONLY, type Register, ok, withCaller } from "./common.js";
+import { READ_ONLY, type Register, ok, resolverFor, withCaller } from "./common.js";
 import { toolError } from "../errors.js";
 
 export const registerIdentityTools: Register = (server, deps) => {
@@ -27,12 +27,13 @@ export const registerIdentityTools: Register = (server, deps) => {
     async (ctx) =>
       withCaller(deps, ctx, async (caller) => {
         const expires = isoTime((await caller.tokenExpiresAt()) / 1000);
+        const defaultDomain = effectiveDefaultDomain(deps.config.defaultDomain, caller.address);
         const structured = {
           address: caller.address,
           api_url: deps.config.apiPublicUrl ?? null,
           token_expires_at: expires,
           transport: deps.config.transport,
-          default_domain: deps.config.defaultDomain ?? null,
+          default_domain: defaultDomain ?? null,
           directory_names: Object.keys(deps.config.directory ?? {}),
         };
         const lines = [
@@ -41,7 +42,7 @@ export const registerIdentityTools: Register = (server, deps) => {
             : `You are **${caller.address}** (${deps.config.transport}).`,
           `Access token expires ${expires ?? "unknown"} and is renewed automatically.`,
         ];
-        if (deps.config.defaultDomain) lines.push(`Short names resolve to @name@${deps.config.defaultDomain}.`);
+        if (defaultDomain) lines.push(`Short names resolve to @name@${defaultDomain}.`);
         if (structured.directory_names.length) lines.push(`Directory names: ${structured.directory_names.join(", ")}.`);
         return ok(lines.join("\n"), structured);
       }),
@@ -59,13 +60,18 @@ export const registerIdentityTools: Register = (server, deps) => {
       outputSchema: z.object({ address: z.string(), resolution: z.enum(["literal", "directory", "default_domain"]) }),
       annotations: { ...READ_ONLY, openWorldHint: false },
     },
-    async ({ name }) => {
-      try {
-        const resolved = resolveAddress(name, deps.config);
-        return ok(`${name} → ${resolved.address} (${resolved.resolution})`, resolved);
-      } catch (error) {
-        return toolError(error instanceof Error ? error.message : String(error));
-      }
+    async ({ name }, ctx) => {
+      const resolve = (resolver: AddressResolver) => {
+        try {
+          const resolved = resolveAddress(name, resolver);
+          return ok(`${name} → ${resolved.address} (${resolved.resolution})`, resolved);
+        } catch (error) {
+          return toolError(error instanceof Error ? error.message : String(error));
+        }
+      };
+      // Only the caller's own domain needs the caller; otherwise resolution is local.
+      if (deps.config.defaultDomain !== CALLER_DOMAIN) return resolve(deps.config);
+      return withCaller(deps, ctx, async (caller) => resolve(resolverFor(deps, caller)));
     },
   );
 };

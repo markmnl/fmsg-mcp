@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add `FMSG_DEFAULT_DOMAIN=caller` (case-insensitive): short names resolve on the domain of the
+  address the server acts as for each request, so a deployment serving callers on several domains
+  resolves `bob` to `@bob@example.org` for `@mark@example.org` and `@bob@example.net` for a caller
+  on `example.net`. `whoami`'s `default_domain` and the server instructions show the caller's
+  domain. Over stdio, `resolve_address` first looks up the configured key's address. Directory
+  entries still take precedence; a fixed or unset default domain is unchanged.
 - Add HTTP `FMSG_MCP_AUTH_MODE=oauth+api-key`, serving OAuth and API-key callers on one endpoint.
   `Bearer fmsgk_...` requests use API-key authentication; all others, including unauthenticated
   requests, use OAuth with its discovery challenge and scope checks. Providers and caches stay

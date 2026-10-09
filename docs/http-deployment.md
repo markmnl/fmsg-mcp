@@ -15,6 +15,11 @@ npx -y @markmnl/fmsg-mcp --http 127.0.0.1:8765
 
 `FMSG_API_KEY` must be unset in HTTP mode. Include only browser origins you use.
 
+When callers have addresses on several domains, set `FMSG_DEFAULT_DOMAIN=caller` rather than one
+fixed domain: short names then resolve on each caller's own domain, so `bob` is `@bob@example.org`
+for `@mark@example.org` and `@bob@example.net` for a caller on `example.net`. `whoami` and the
+server instructions show that caller's domain. `FMSG_DIRECTORY` entries still take precedence.
+
 If the server reaches the Web API at an internal address instead, for example
 `FMSG_API_URL=http://10.0.0.5:8000` with `FMSG_ALLOW_INSECURE_HTTP=1` on a private network, also set
 `FMSG_API_PUBLIC_URL=https://api.example.com` so `whoami` reports the URL users know. Without it,

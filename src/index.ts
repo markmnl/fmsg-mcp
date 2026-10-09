@@ -30,7 +30,8 @@ Environment:
   FMSG_MCP_OAUTH_*           OAuth resource/issuer URLs, client ID/secret and exchange
                             audience; see docs/oauth.md for required settings
   FMSG_ALLOW_INSECURE_HTTP   1 to allow a trusted private HTTP API outside loopback
-  FMSG_DEFAULT_DOMAIN        lets short names resolve: bob -> @bob@<domain>
+  FMSG_DEFAULT_DOMAIN        lets short names resolve: bob -> @bob@<domain>; caller
+                            uses the domain of each caller's own address
   FMSG_DIRECTORY             JSON file mapping short names to @user@domain
   FMSG_MCP_DOWNLOAD_DIR      enables save_attachment to this local folder (stdio)
   FMSG_MCP_WAIT_MAX_SECONDS  cap on one wait_for_message call (default 230)
