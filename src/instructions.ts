@@ -1,7 +1,7 @@
 /**
  * Server instructions: returned in the MCP `initialize` result and folded into
- * the model's system prompt by hosts. Three jobs only: precedence over other
- * fmsg access paths, the irreversible-send rule, and the usage facts a model
+ * the model's system prompt by hosts. Three jobs only: which address this server
+ * acts as, the irreversible-send rule, and the usage facts a model
  * otherwise gets wrong. Per-tool detail lives in the tool descriptions.
  */
 import { CALLER_DOMAIN, effectiveDefaultDomain } from "./address.js";
@@ -11,12 +11,15 @@ export type InstructionsContext = {
   address?: string;
   /** FMSG_DEFAULT_DOMAIN: a domain, or CALLER_DOMAIN for the caller's own domain. */
   defaultDomain?: string;
+  /** Whether get_attachment_download_url is registered (HTTP with a public URL). */
+  downloadUrls?: boolean;
 };
 
 export function buildInstructions(ctx: InstructionsContext = {}): string {
   const identity = ctx.address
     ? `you are acting as ${ctx.address}`
     : "call whoami to see which";
+  const actsAs = ctx.address ? `this server acts only as ${ctx.address}` : "this server acts only as the address whoami reports";
   const domain = effectiveDefaultDomain(ctx.defaultDomain, ctx.address);
   const shortNames = domain
     ? `; short names resolve to @name@${domain}`
@@ -26,11 +29,14 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
   return [
     `This server sends and receives fmsg messages as one fmsg address: ${identity}. ` +
       "Use its tools for everything fmsg: inbox, threads, attachments, sending, replying, reactions, " +
-      "delivery status and waiting for new messages. Do not use an fmsg command-line tool, local config " +
-      "files or cached credentials instead; they may belong to a different address or host. If a tool " +
-      "reports the server is not configured, explain the reported configuration fix and restart requirement. " +
-      "For URLs returned by get_attachment_download_url, use your host's authenticated download facility " +
-      "with this MCP connection; never search for credentials or put them in prompts or URLs.",
+      "delivery status and waiting for new messages. Other fmsg tools or local credentials may act as a " +
+      `different address or host; ${actsAs}. If a tool ` +
+      "reports the server is not configured, explain the reported configuration fix and restart requirement." +
+      (ctx.downloadUrls
+        ? " For URLs returned by get_attachment_download_url, use your host's authenticated download facility " +
+          "with this MCP connection, or download_attachment if it has none; never search for credentials or put " +
+          "them in prompts or URLs."
+        : ""),
     "Carry out the user's requested messaging task or authorized automation without repeatedly asking for " +
       "confirmation. Sending is immediate and sent messages cannot be edited or recalled. Ask the user only " +
       "when a decision is needed to resolve unclear intent, recipients or content. The AI host controls tool " +

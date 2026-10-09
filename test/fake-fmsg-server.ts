@@ -26,6 +26,9 @@ export type StoredMessage = {
   terminal: boolean;
   attachments: Array<{ filename: string; size: number; data: Buffer; type: string }>;
   reaction: string | null;
+  /** Sent deflate-compressed: `size` reports the compressed wire size while data holds the decoded body. */
+  deflate: boolean;
+  wireSize?: number;
   readBy: Map<string, number>;
   deleted: boolean;
 };
@@ -172,6 +175,8 @@ export class FakeFmsgServer {
       terminal: input.terminal ?? false,
       attachments: (input.attachments ?? []).map((a) => ({ filename: a.filename, size: a.data.byteLength, data: a.data, type: a.type ?? "application/octet-stream" })),
       reaction: input.reaction ?? null,
+      deflate: input.deflate ?? false,
+      ...(input.wireSize !== undefined ? { wireSize: input.wireSize } : {}),
       readBy: new Map(),
       deleted: false,
     };
@@ -232,7 +237,7 @@ export class FakeFmsgServer {
       has_add_to: m.add_to.length > 0,
       important: m.important,
       no_reply: m.no_reply,
-      deflate: false,
+      deflate: m.deflate,
       terminal: m.terminal,
       pid: m.pid,
       from: m.from,
@@ -242,7 +247,7 @@ export class FakeFmsgServer {
       time: m.time,
       topic: m.topic,
       type: m.type,
-      size: m.data.byteLength,
+      size: m.wireSize ?? m.data.byteLength,
       ...(short !== undefined ? { short_text: short } : {}),
       read: mine ? false : timeRead !== null,
       time_read: mine ? null : timeRead,
@@ -509,11 +514,12 @@ export class FakeFmsgServer {
           time: x.time,
           topic: x.topic,
           type: x.type,
-          size: x.data.byteLength,
+          size: x.wireSize ?? x.data.byteLength,
+          ...(x.deflate ? { deflate: true } : {}),
           message_sha256: "00",
           body: {
             type: x.type,
-            size: x.data.byteLength,
+            size: x.wireSize ?? x.data.byteLength,
             ...(inline ? { text: x.data.toString("utf8") } : { download: `/fmsg/${x.id}/data` }),
             cacheable: false,
           },

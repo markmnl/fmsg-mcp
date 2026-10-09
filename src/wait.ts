@@ -25,13 +25,22 @@ export type WaitOptions = {
 
 export type Pending = { id: string; from: string; root_id: string | null };
 export type SkipReason = "own" | "reaction" | "no_reply" | "from_mismatch" | "other_thread";
-export type Skipped = { id: string; reason: SkipReason };
+export type Skipped = {
+  id: string;
+  reason: SkipReason;
+  from: string;
+  /** For reactions: the emoji ("" clears) and the message reacted to. */
+  emoji?: string;
+  reaction_to?: string | null;
+};
 export type Unclassified = { id: string; from: string; error: string };
 
 export type WaitResult = {
   status: "message" | "timeout";
   after_id: string;
   thread_root_id: string | null;
+  /** The root's topic when the root was readable; replies carry no topic of their own. */
+  thread_topic: string | null;
   messages: FmsgMessage[];
   pending_other_threads: Pending[];
   /** Messages deliberately passed over (the cursor advances past these). */
@@ -87,16 +96,24 @@ export async function waitForMessage(
     }
   };
   const rootCache = new Map<string, string>();
+  /** Root topics seen while resolving roots, so results can name the thread without another request. */
+  const rootTopics = new Map<string, string>();
   const lookupRoot = async (id: string): Promise<string> => {
     try {
-      return (await client.getThreadMessages(id, retrySignal)).root_id;
+      const thread = await client.getThreadMessages(id, retrySignal);
+      const root = thread.messages[0];
+      if (root?.visible && root.id === thread.root_id) rootTopics.set(root.id, root.topic ?? "");
+      return thread.root_id;
     } catch (error) {
       if (authorizationFailure(error)) throw error;
       // Fall back to a bounded pid walk; any failure here propagates as "unknown".
       let cur = id;
       for (let i = 0; i < 100; i++) {
         const m = await client.getMessage(cur, retrySignal);
-        if (!m.pid) return m.id;
+        if (!m.pid) {
+          rootTopics.set(m.id, m.topic ?? "");
+          return m.id;
+        }
         cur = m.pid;
       }
       throw error;
@@ -185,6 +202,7 @@ export async function waitForMessage(
         status: batch.length ? "message" : "timeout",
         after_id: afterId,
         thread_root_id: batchRoot,
+        thread_topic: batchRoot === null ? null : (rootTopics.get(batchRoot) ?? null),
         messages: [...batch].sort((a, b) => compareMessageIds(a.id, b.id)),
         pending_other_threads: pending,
         skipped: [...skipped].sort((a, b) => compareMessageIds(a.id, b.id)),
@@ -216,7 +234,8 @@ export async function waitForMessage(
       for (let i = unclassified.length - 1; i >= 0; i--) if (unclassified[i]?.id === m.id) unclassified.splice(i, 1);
       if (compareMessageIds(m.id, floor) <= 0) return;
       const skip = (reason: SkipReason) => {
-        skipped.push({ id: m.id, reason });
+        const reaction = typeof m.reaction === "string" ? { emoji: m.reaction, reaction_to: m.pid ?? null } : {};
+        skipped.push({ id: m.id, reason, from: m.from, ...reaction });
         if (compareMessageIds(m.id, skippedMax) > 0) skippedMax = m.id;
       };
       if (m.from.toLowerCase() === me) return skip("own");

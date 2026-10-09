@@ -69,7 +69,9 @@ the public same-origin value, so explicitly listing that origin is optional.
 `https://mcp.example.com/mcp/attachments/123/report.pdf`. The host fetches it with an authenticated
 GET, using the same `Authorization: Bearer ...` header as its MCP connection. OAuth requires
 `fmsg:read`; the server exchanges the incoming token for a Web API token as usual. The Web API
-checks visibility on every download, even when a link was obtained earlier.
+checks visibility on every download, even when a link was obtained earlier. Hosts that cannot send
+the connection's Authorization header with an arbitrary GET (many chat hosts cannot) should use
+`download_attachment` instead; the tool's description and result say so.
 
 Set `FMSG_MCP_PUBLIC_URL` to the exact external MCP endpoint when using API keys. OAuth defaults
 to `FMSG_MCP_OAUTH_RESOURCE_URL`; if both are set, they must match. These URLs require HTTPS outside

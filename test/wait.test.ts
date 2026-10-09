@@ -160,7 +160,8 @@ describe("waitForMessage", () => {
     const r = await p;
     expect(r.status).toBe("message");
     expect(r.messages.map((m) => m.id)).toEqual([inThread.id]);
-    expect(r.skipped).toEqual([{ id: other.id, reason: "other_thread" }]);
+    expect(r.skipped).toEqual([{ id: other.id, reason: "other_thread", from: CAROL }]);
+    expect(r.thread_topic).toBe("A");
     expect(r.unclassified).toEqual([]);
     expect(r.after_id).toBe(inThread.id);
   });

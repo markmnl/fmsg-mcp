@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- Fix truncated bodies of deflate-compressed messages: `size` is the compressed wire size, so
+  `short_text` (a preview of the decoded body) was taken as complete whenever the body compressed
+  below it. Such messages now always fetch the full body. `get_message`'s `body_bytes` and
+  `get_thread`'s new per-message `body_bytes` report the decoded length when the body was read.
+- Structured results that carry other parties' words (`list_messages`, `list_sent`,
+  `get_message`, `get_thread`, `wait_for_message`, `download_attachment`,
+  `get_attachment_download_url`, `save_attachment`) include `untrusted_content_notice`, so the
+  safety framing survives hosts that show `structuredContent` instead of the text.
+  `wait_for_message` and `get_thread` add a `next` step, and `get_attachment_download_url` a
+  `fallback`.
+- `wait_for_message` `skipped` entries add `from`, and for reactions `emoji` and `reaction_to`;
+  skipped reactions are also listed in the text. Results add `thread_topic`, read from the thread
+  lookup the wait already makes. The description explains that a timeout's `after_id` is never
+  older than the inbox's newest message (`"0"` only for an empty inbox) and that each wait is a
+  model turn in chat hosts.
+- `add_recipients` takes `recipients`, matching `reply`; `add_to` stays as a deprecated alias
+  (pass one or the other). Results add `recipients` alongside `add_to`.
+- `get_thread` adds `thread_topic`, the root's topic (replies carry none).
+- Attachment types are consistent: a missing or generic `application/octet-stream` type is
+  inferred from the filename extension, as the download route does. List items, `get_message`,
+  send results and download links now include `type`.
+- `delivery_status` and `list_sent` describe response codes accurately (`200` accepted, other fmsg
+  codes rejections, `null` when not recorded) and add `code_meaning`. Negative host-local codes
+  count as pending rather than failed.
+- List items add `reaction` (the emoji when the item is itself a reaction). Hidden reactions never
+  count as unread; `mark_read` accepts listed ones.
+- `whoami` reports `transport` as `stdio` or `streamable-http` (was `http`), says "connected over
+  Streamable HTTP", and no longer states the token expiry in its text; `token_expires_at` stays in
+  the structured result, described as internal. `directory_names` is omitted when empty.
+  `resolve_address`'s description names only the resolution steps the operator configured.
+- Descriptions and errors mention `save_attachment` and `get_attachment_download_url` only where
+  those tools are registered. The server instructions now state that other fmsg tools or local
+  credentials may act as a different address, instead of directing the model away from them.
+
 - Add `FMSG_DEFAULT_DOMAIN=caller` (case-insensitive): short names resolve on the domain of the
   address the server acts as for each request, so a deployment serving callers on several domains
   resolves `bob` to `@bob@example.org` for `@mark@example.org` and `@bob@example.net` for a caller

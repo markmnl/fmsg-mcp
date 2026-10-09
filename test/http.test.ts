@@ -171,7 +171,7 @@ describe("HTTP transport", () => {
     const alice = await connect("fmsgk_alice_secret");
     const bob = await connect("fmsgk_bob_secret");
     try {
-      expect(structured<{ address: string; transport: string }>(await call(alice, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
+      expect(structured<{ address: string; transport: string }>(await call(alice, "whoami"))).toMatchObject({ address: ALICE, transport: "streamable-http" });
       expect(structured<{ address: string }>(await call(bob, "whoami")).address).toBe(BOB);
       fake.seed({ from: BOB, to: [ALICE], topic: "for alice", data: "hi alice" });
       expect(structured<{ count: number }>(await call(alice, "list_messages")).count).toBe(1);

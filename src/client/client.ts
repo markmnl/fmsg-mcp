@@ -209,9 +209,13 @@ export class FmsgClient {
     return { data: new Uint8Array(await response.arrayBuffer()), ...(contentType ? { contentType } : {}) };
   }
 
-  /** Whether `short_text` already holds the complete body. */
+  /**
+   * Whether `short_text` already holds the complete body. `size` is the wire size,
+   * so a deflate-compressed message's preview is never treated as complete.
+   */
   static shortTextIsComplete(message: FmsgMessage): boolean {
     if (typeof message.short_text !== "string") return false;
+    if (message.deflate === true) return false;
     if (typeof message.size !== "number") return false;
     return Buffer.byteLength(message.short_text, "utf8") >= message.size;
   }

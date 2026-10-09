@@ -206,6 +206,20 @@ describe("FmsgClient", () => {
     expect(fake.requests.filter((r) => r.path.endsWith("/data"))).toHaveLength(1);
   });
 
+  it("never treats short_text as complete for a deflate-compressed message", async () => {
+    // A body longer than the preview cap, compressed on the wire to less than the cap.
+    const body = "z".repeat(807);
+    const m = fake.seed({ from: BOB, to: [ALICE], data: body, deflate: true, wireSize: 474 });
+    const got = await client.getMessage(m.id);
+    expect(got.size).toBe(474);
+    expect(got.short_text).toBe(body.slice(0, 768));
+    expect(FmsgClient.shortTextIsComplete(got)).toBe(false);
+    expect(await client.getText(got)).toBe(body);
+    const small = await client.getMessage(fake.seed({ from: BOB, to: [ALICE], data: "tiny", deflate: true, wireSize: 3 }).id);
+    expect(FmsgClient.shortTextIsComplete(small)).toBe(false);
+    expect(await client.getText(small)).toBe("tiny");
+  });
+
   it("sends draft → attach → send with the exact pid and rolls back on failure", async () => {
     const parent = fake.seed({ from: BOB, to: [ALICE], topic: "t", data: "parent" });
     const sent = await client.send({

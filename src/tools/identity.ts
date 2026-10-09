@@ -3,6 +3,12 @@ import { type AddressResolver, CALLER_DOMAIN, effectiveDefaultDomain, resolveAdd
 import { isoTime } from "../render.js";
 import { READ_ONLY, type Register, ok, resolverFor, withCaller } from "./common.js";
 import { toolError } from "../errors.js";
+import type { Transport } from "../config.js";
+
+const TRANSPORT_NAMES: Record<Transport, { id: "stdio" | "streamable-http"; label: string }> = {
+  stdio: { id: "stdio", label: "stdio" },
+  http: { id: "streamable-http", label: "Streamable HTTP" },
+};
 
 export const registerIdentityTools: Register = (server, deps) => {
   server.registerTool(
@@ -11,16 +17,17 @@ export const registerIdentityTools: Register = (server, deps) => {
       title: "Show fmsg identity",
       description:
         "Report the fmsg address this server acts as (from the authenticated connection), the fmsg Web API URL " +
-        "(null when the server does not publish it), " +
-        "when the current access token expires (it is renewed automatically; no action needed), and the " +
-        "address-resolution defaults. Call this first if unsure who you are sending as.",
+        "(null when the server does not publish it), the MCP transport and the address-resolution defaults. " +
+        "Access is renewed automatically; no action is needed. Call this first if unsure who you are sending as.",
       outputSchema: z.object({
         address: z.string(),
         api_url: z.string().nullable(),
-        token_expires_at: z.string().nullable(),
-        transport: z.enum(["stdio", "http"]),
+        token_expires_at: z.string().nullable().describe(
+          "internal: when the server's current upstream access token expires; it is renewed automatically, so no action is needed",
+        ),
+        transport: z.enum(["stdio", "streamable-http"]),
         default_domain: z.string().nullable(),
-        directory_names: z.array(z.string()),
+        directory_names: z.array(z.string()).optional().describe("short names in the operator-configured directory; omitted when there are none"),
       }),
       annotations: { ...READ_ONLY, openWorldHint: false },
     },
@@ -28,33 +35,41 @@ export const registerIdentityTools: Register = (server, deps) => {
       withCaller(deps, ctx, async (caller) => {
         const expires = isoTime((await caller.tokenExpiresAt()) / 1000);
         const defaultDomain = effectiveDefaultDomain(deps.config.defaultDomain, caller.address);
+        const directoryNames = Object.keys(deps.config.directory ?? {});
+        const transport = TRANSPORT_NAMES[deps.config.transport];
         const structured = {
           address: caller.address,
           api_url: deps.config.apiPublicUrl ?? null,
           token_expires_at: expires,
-          transport: deps.config.transport,
+          transport: transport.id,
           default_domain: defaultDomain ?? null,
-          directory_names: Object.keys(deps.config.directory ?? {}),
+          ...(directoryNames.length ? { directory_names: directoryNames } : {}),
         };
         const lines = [
           deps.config.apiPublicUrl
-            ? `You are **${caller.address}** on ${deps.config.apiPublicUrl} (${deps.config.transport}).`
-            : `You are **${caller.address}** (${deps.config.transport}).`,
-          `Access token expires ${expires ?? "unknown"} and is renewed automatically.`,
+            ? `You are **${caller.address}** on ${deps.config.apiPublicUrl}, connected over ${transport.label}.`
+            : `You are **${caller.address}**, connected over ${transport.label}.`,
+          "Access is renewed automatically.",
         ];
         if (defaultDomain) lines.push(`Short names resolve to @name@${defaultDomain}.`);
-        if (structured.directory_names.length) lines.push(`Directory names: ${structured.directory_names.join(", ")}.`);
+        if (directoryNames.length) lines.push(`Directory names: ${directoryNames.join(", ")}.`);
         return ok(lines.join("\n"), structured);
       }),
   );
 
+  // Describe only the resolution steps this deployment has; both are operator settings.
+  const steps = [
+    ...(Object.keys(deps.config.directory ?? {}).length ? ["otherwise an entry in the operator-configured directory of short names"] : []),
+    ...(deps.config.defaultDomain === CALLER_DOMAIN ? ["otherwise @name@<your domain>, the domain of the address you act as"]
+      : deps.config.defaultDomain ? [`otherwise @name@${deps.config.defaultDomain}`] : []),
+  ];
   server.registerTool(
     "resolve_address",
     {
       title: "Resolve fmsg address",
       description:
-        "Resolve a short name to a full fmsg address without sending anything: a literal @user@domain is returned " +
-        "as-is, otherwise a configured directory entry is used, otherwise @name@<default domain>. " +
+        "Resolve a recipient to a full fmsg address without sending anything: a literal @user@domain is returned " +
+        `as-is${steps.length ? `, ${steps.join(", ")}` : "; this server has no short-name defaults, so other names fail"}. ` +
         "Fails when nothing matches so you can ask the user for the full address.",
       inputSchema: z.object({ name: z.string().describe("Full fmsg address (@user@domain) or a short name") }),
       outputSchema: z.object({ address: z.string(), resolution: z.enum(["literal", "directory", "default_domain"]) }),
