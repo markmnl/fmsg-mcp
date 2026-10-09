@@ -84,12 +84,17 @@ export type ThreadMessage = {
   visible: boolean;
   version?: number;
   pid?: string | null;
+  /** Flags are omitted when false. */
+  no_reply?: boolean;
+  important?: boolean;
+  terminal?: boolean;
   from?: string;
   to?: string[];
   add_to?: AddToBatch[];
   time?: number | null;
   topic?: string;
   type?: string;
+  /** Body size on the wire: the compressed size when `deflate` is true. */
   size?: number;
   deflate?: boolean;
   message_sha256?: string;

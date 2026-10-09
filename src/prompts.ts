@@ -21,7 +21,8 @@ export function registerPrompts(server: McpServer): void {
       const text = [
         `Chat over fmsg on my behalf (${mode === "keep" ? "keep replying within the thread" : "reply once to the next message"}).`,
         `1. Call wait_for_message${thread ? ` with thread_of "${thread}"` : ""}${from ? ` and from "${from}"` : ""}. On status "timeout" call it again with the same arguments; stop after ${minutes} minutes with nothing arriving.`,
-        "2. When messages arrive, tell me in one line who wrote what, then compose a reply and send it with the reply tool to reply_target_id.",
+        "2. When messages arrive, tell me in one line who wrote what, then compose a reply and send it with the reply tool to reply_target_id. " +
+          "Follow the result's next step: it also names new messages on other threads (pending_ids) that the next wait will not return.",
         mode === "keep"
           ? `3. Call wait_for_message again with the returned after_id and the same thread_of, and repeat. Stop after ${replies} replies, when I interrupt, or when the other party says goodbye.`
           : "3. Then stop and report back.",

@@ -516,6 +516,9 @@ export class FakeFmsgServer {
           type: x.type,
           size: x.wireSize ?? x.data.byteLength,
           ...(x.deflate ? { deflate: true } : {}),
+          ...(x.no_reply ? { no_reply: true } : {}),
+          ...(x.important ? { important: true } : {}),
+          ...(x.terminal ? { terminal: true } : {}),
           message_sha256: "00",
           body: {
             type: x.type,

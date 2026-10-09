@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import { type AddressResolver, CALLER_DOMAIN, effectiveDefaultDomain, resolveAddress } from "../address.js";
-import { isoTime } from "../render.js";
+import { addressText, isoTime } from "../render.js";
 import { READ_ONLY, type Register, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { toolError } from "../errors.js";
 import type { Transport } from "../config.js";
@@ -45,8 +45,8 @@ export const registerIdentityTools: Register = (server, deps) => {
         };
         const lines = [
           deps.config.apiPublicUrl
-            ? `You are **${caller.address}** on ${deps.config.apiPublicUrl}, connected over ${transport}.`
-            : `You are **${caller.address}**, connected over ${transport}.`,
+            ? `You are ${addressText(caller.address)} on ${deps.config.apiPublicUrl}, connected over ${transport}.`
+            : `You are ${addressText(caller.address)}, connected over ${transport}.`,
           "Access is renewed automatically.",
         ];
         if (defaultDomain) lines.push(`Short names resolve to @name@${defaultDomain}.`);
@@ -77,7 +77,7 @@ export const registerIdentityTools: Register = (server, deps) => {
       const resolve = (resolver: AddressResolver) => {
         try {
           const resolved = resolveAddress(name, resolver);
-          return ok(`${name} → ${resolved.address} (${resolved.resolution})`, resolved);
+          return ok(`${name} → ${addressText(resolved.address)} (${resolved.resolution})`, resolved);
         } catch (error) {
           return toolError(error instanceof Error ? error.message : String(error));
         }

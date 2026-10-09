@@ -130,26 +130,30 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 |---|---|
 | `whoami` | The address this server acts as, the public API URL (when known), the transport (`stdio` or `http`, which is Streamable HTTP) and short-name defaults |
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
-| `list_messages` | Inbox, newest first, with previews and attachment types; reactions hidden and never counted as unread unless `include_reactions` |
+| `list_messages` | Inbox, newest first, with previews, attachment types and wire `size` (`compressed` marks a deflated body); reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |
-| `get_message` | One message with headers, full text body, attachments and reactions |
-| `get_thread` | The lineage from the thread root to a message, with gaps for messages you cannot see, and the root's `thread_topic` |
+| `get_message` | One message with headers, full text body, attachments, reactions and, for a reply, the root's `thread_topic` |
+| `get_thread` | The lineage from the thread root to a message (`scope: "lineage"`; other replies in the thread are not included), with gaps for messages you cannot see, per-message flags and added recipients, the root's `thread_topic`, and a `next` step that never suggests replying to a terminal or no-reply message |
 | `send_message` | Start a new thread; sends immediately (fmsg messages are immutable) |
 | `reply` | Reply into a thread; reply-all by default, refuses terminal and no-reply parents |
 | `add_recipients` | Add `recipients` to a sent message (`add_to` is a deprecated alias) |
 | `react` | Set or clear your emoji reaction |
 | `mark_read` | Mark received messages read |
-| `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources |
+| `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources; a wrong filename lists the names the message has |
 | `get_attachment_download_url` | Get a credential-free URL and resource link for an authenticated binary download; HTTP only, requires a public MCP URL; hosts that cannot send the connection's Authorization header use `download_attachment` |
 | `save_attachment` | Stream an attachment to the configured local folder; stdio only, enabled by `FMSG_MCP_DOWNLOAD_DIR` |
-| `delivery_status` | Per-recipient delivery times and fmsg response codes (`200` accepted; `null` when not recorded) |
-| `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context, skipped reactions and a `next` step |
+| `delivery_status` | Per-recipient delivery times and fmsg response codes (`200` accepted; `null` when not recorded); for a received message, the host's own receipt records; `via` is `to` or `add_to` (added later) |
+| `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context, skipped reactions and a `next` step that names messages from other threads (`pending_ids`) the cursor moved past |
 
 Every tool returns readable Markdown plus `structuredContent`. Ids are decimal strings. Message
 bodies are labelled as data from other parties, not instructions; structured results that carry
 other parties' words repeat that in `untrusted_content_notice`, since some hosts show the
 structured result instead of the text. Attachment types come from the host when it recorded one,
-otherwise from the filename extension, so every tool reports the same type.
+otherwise from the filename extension, so every tool reports the same type, and every tool lists
+attachments in the same order (by filename). Addresses in the text are code spans, so they copy
+exactly (`@bob_mcp@example.com`, never with a Markdown escape); a backslash in an address is
+rejected. A message's `size` is the body's size on the wire: the compressed length when
+`compressed` is true.
 
 ### Output schema compatibility
 
@@ -228,7 +232,10 @@ explain the configuration error and how to fix it; restart the MCP server after 
   annotated `destructiveHint` to describe their effects. Approval behavior belongs to the AI host;
   fmsg-mcp has no additional confirmation gate.
 - Selected API-key/token formats are redacted from outbound bodies, topics and error text; the
-  send tools report the count. This is not general data-loss prevention or binary attachment scanning.
+  send tools report the count. They include fmsg API keys, JWTs, private key blocks, source-hosting
+  tokens (`ghp_…`, `github_pat_…`, `glpat-…`), cloud access key ids (`AKIA…`, `ASIA…`) and labelled
+  secret access keys, `AIza…` API keys, chat-platform tokens (`xox…`), payment-platform keys
+  (`sk_live_…`, `rk_live_…`, `sk_test_…`, `whsec_…`) and `sk-…` API keys. This is not general data-loss prevention or binary attachment scanning.
 - Nothing about message size or acceptance is assumed: the fmsg host's own responses and delivery
   codes are surfaced verbatim.
 - The server publishes MCP `instructions` (shown to the model at session start) telling agents to use

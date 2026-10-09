@@ -72,7 +72,7 @@ describe("whoami api_url", () => {
       const result = await call(h.client, "whoami");
       expect(structured(result)).toMatchObject({ address: ALICE, api_url: null, transport: "http" });
       expect(text(result)).not.toContain(fake.baseUrl);
-      expect(text(result)).toContain(`You are **${ALICE}**, connected over Streamable HTTP.`);
+      expect(text(result)).toContain(`You are \`${ALICE}\`, connected over Streamable HTTP.`);
     } finally { await h.close(); }
   });
 
