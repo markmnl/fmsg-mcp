@@ -21,7 +21,11 @@ export type WaitOptions = {
   /** How long to wait for the WebSocket to open before falling back to polling. */
   wsOpenTimeoutMs?: number;
   onTick?: (elapsedMs: number) => void;
+  /** Server shutdown: end the wait early with status "interrupted" and a resumable cursor. */
+  interrupt?: AbortSignal;
 };
+
+export const INTERRUPTED_NOTE = "the server is restarting; call wait_for_message again with the after_id returned here; no messages are lost";
 
 export type Pending = { id: string; from: string; root_id: string | null };
 export type SkipReason = "own" | "reaction" | "no_reply" | "from_mismatch" | "other_thread";
@@ -36,7 +40,8 @@ export type Skipped = {
 export type Unclassified = { id: string; from: string; error: string };
 
 export type WaitResult = {
-  status: "message" | "timeout";
+  /** "interrupted": the server is shutting down; resume from after_id. */
+  status: "message" | "timeout" | "interrupted";
   after_id: string;
   thread_root_id: string | null;
   /** The root's topic when the root was readable; replies carry no topic of their own. */
@@ -180,8 +185,10 @@ export async function waitForMessage(
       clearInterval(pollTimer);
       clearInterval(tickTimer);
       signal?.removeEventListener("abort", onAbort);
+      options.interrupt?.removeEventListener("abort", onInterrupt);
       if (socket) disposeSocket(socket);
     };
+    let interrupted = false;
     const finish = () => {
       if (finished) return;
       cleanup();
@@ -199,7 +206,7 @@ export async function waitForMessage(
         note = note ? `${note}; ${held}` : held;
       }
       resolve({
-        status: batch.length ? "message" : "timeout",
+        status: batch.length ? "message" : interrupted ? "interrupted" : "timeout",
         after_id: afterId,
         thread_root_id: batchRoot,
         thread_topic: batchRoot === null ? null : (rootTopics.get(batchRoot) ?? null),
@@ -220,13 +227,21 @@ export async function waitForMessage(
       note = "cancelled";
       finish();
     };
+    // Messages already collected are still returned; their cursor covers them.
+    const onInterrupt = () => {
+      interrupted = true;
+      note = batch.length ? "the server is restarting, which cut the settle window short" : INTERRUPTED_NOTE;
+      finish();
+    };
     const deadlineTimer = setTimeout(() => {
       if (batch.length && settleTimer) note = "the time limit cut the settle window short";
       finish();
     }, Math.max(0, deadline - Date.now()));
     const tickTimer = setInterval(() => options.onTick?.(Date.now() - start), 20_000);
     signal?.addEventListener("abort", onAbort, { once: true });
+    options.interrupt?.addEventListener("abort", onInterrupt, { once: true });
     if (signal?.aborted) return onAbort();
+    if (options.interrupt?.aborted) return onInterrupt();
 
     const consider = async (m: FmsgMessage) => {
       if (finished || seen.has(m.id)) return;

@@ -9,7 +9,12 @@ import { OAuthRequestError } from "../oauth/errors.js";
 import { FmsgHttpError } from "../client/client.js";
 import { UNTRUSTED_CONTENT_NOTICE, attachmentType, isoTime, preview } from "../render.js";
 
-export type ToolDeps = { provider: CallerProvider; config: Config };
+export type ToolDeps = {
+  provider: CallerProvider;
+  config: Config;
+  /** Aborted when the server begins shutting down; long waits then return early. */
+  shutdown?: AbortSignal;
+};
 
 export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 export const SENDS: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };

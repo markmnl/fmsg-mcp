@@ -6,7 +6,7 @@ import { FmsgClient } from "./client/client.js";
 import { safeErrorMessage } from "./client/redact.js";
 import { loadConfig, DEFAULT_HTTP_PORT, type ConfigOverrides } from "./config.js";
 import { type CallerProvider, StaticCallerProvider, UnconfiguredCallerProvider } from "./context.js";
-import { createHttpServer, MCP_PATH } from "./http.js";
+import { createHttpServer, MCP_PATH, SHUTDOWN_GRACE_MS } from "./http.js";
 import { createFmsgMcpServer } from "./server.js";
 import { PACKAGE_NAME, VERSION } from "./version.js";
 
@@ -120,16 +120,18 @@ async function main(): Promise<void> {
       const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000).unref());
       return Promise.race([provider.forRequest(undefined).then((c) => c.address), timeout]).catch(() => undefined);
     };
+    const shutdown = new AbortController();
     const handle = serveStdio(async () => {
       const address = await knownAddress();
-      return createFmsgMcpServer(provider, cfg, address ? { address } : {});
+      return createFmsgMcpServer(provider, cfg, { ...(address ? { address } : {}), shutdown: shutdown.signal });
     });
-    const stop = () => {
+    onShutdown(async () => {
+      // Let an in-flight wait write its "interrupted" result before the transport closes.
+      shutdown.abort();
+      await new Promise((resolve) => setTimeout(resolve, 250));
       provider.close?.();
-      void handle.close().finally(() => process.exit(0));
-    };
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
+      await handle.close();
+    });
     return;
   }
 
@@ -141,9 +143,20 @@ async function main(): Promise<void> {
   const addr = server.address();
   const shown = typeof addr === "object" && addr ? `${addr.address}:${addr.port}` : `${config.http.host}:${config.http.port}`;
   console.error(safeErrorMessage(`fmsg-mcp ${VERSION} serving Streamable HTTP at http://${shown}${MCP_PATH} for ${config.apiUrl}`));
-  const stop = () => void close().finally(() => process.exit(0));
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+  onShutdown(() => close());
+}
+
+/** Stop on SIGINT/SIGTERM within a bounded time; a second signal exits at once. */
+function onShutdown(stop: () => Promise<void>): void {
+  let stopping = false;
+  const handler = () => {
+    if (stopping) process.exit(1);
+    stopping = true;
+    setTimeout(() => process.exit(1), SHUTDOWN_GRACE_MS + 5000).unref();
+    void stop().catch((error) => console.error(`fmsg-mcp: shutdown failed: ${safeErrorMessage(error)}`)).finally(() => process.exit(0));
+  };
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
 }
 
 function invokedDirectly(): boolean {

@@ -51,6 +51,44 @@ describe("HTTP transport", () => {
     } finally { socket.destroy(); await closing; }
   });
 
+  it("ends an in-flight wait with a resumable interrupted result when the server closes", async () => {
+    const before = fake.seed({ from: BOB, to: [ALICE], data: "already seen" });
+    const client = await connect("fmsgk_alice_secret");
+    const waiting = call(client, "wait_for_message", { after_id: before.id, timeout_seconds: 110 });
+    await vi.waitFor(() => expect(fake.connectedSockets(ALICE)).toBe(1));
+    const started = Date.now();
+    const closing = http.close();
+    const result = await waiting;
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(result.isError).toBeFalsy();
+    expect(structured<Record<string, unknown>>(result)).toMatchObject({ status: "interrupted", after_id: before.id, messages: [] });
+    expect(structured<{ next: string }>(result).next).toBe(`The server is restarting; call wait_for_message with after_id "${before.id}" to keep listening. No messages are lost.`);
+    expect(text(result)).toContain("The server is restarting");
+    await closing;
+    expect(Date.now() - started).toBeLessThan(2000);
+    await client.close().catch(() => undefined);
+  });
+
+  it("answers requests still pending after the shutdown grace with 503", async () => {
+    const config = configFor(fake, "http", { FMSG_MCP_PUBLIC_URL: "https://mcp.example.com/mcp" });
+    const slow = createHttpServer(config, () => undefined);
+    await new Promise<void>((resolve) => slow.server.listen(0, "127.0.0.1", resolve));
+    const message = fake.seed({ from: BOB, to: [ALICE], attachments: [{ filename: "stuck.bin", data: Buffer.from([1]) }] });
+    let upstream!: () => void;
+    const reached = new Promise<void>((resolve) => { upstream = resolve; });
+    fake.attachmentResponse = () => upstream();   // never answers
+    const port = (slow.server.address() as AddressInfo).port;
+    const response = fetch(`http://127.0.0.1:${port}/mcp/attachments/${message.id}/stuck.bin`, { headers: { authorization: "Bearer fmsgk_alice_secret" } });
+    await reached;
+    const started = Date.now();
+    await slow.close({ graceMs: 200 });
+    const answered = await response;
+    expect(answered.status).toBe(503);
+    expect(answered.headers.get("retry-after")).toBe("5");
+    expect(await answered.json()).toEqual({ error: "fmsg-mcp is restarting; retry shortly" });
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   it("requires a bearer fmsg API key", async () => {
     const none = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(none.status).toBe(401);

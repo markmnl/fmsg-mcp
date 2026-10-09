@@ -20,6 +20,8 @@ export const SERVER_NAME = "fmsg";
 export type CreateServerOptions = {
   /** The caller's address when already known; makes the instructions name it. */
   address?: string;
+  /** Aborted when the process begins shutting down, so wait_for_message returns "interrupted". */
+  shutdown?: AbortSignal;
 };
 
 /**
@@ -33,7 +35,7 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
     downloadUrls: downloadBaseUrl(config) !== undefined,
   });
   const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
-  const deps: ToolDeps = { provider, config };
+  const deps: ToolDeps = { provider, config, ...(options.shutdown ? { shutdown: options.shutdown } : {}) };
   registerIdentityTools(server, deps);
   registerListTools(server, deps);
   registerReadTools(server, deps);

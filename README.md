@@ -119,7 +119,9 @@ For loopback binds, loopback browser origins on any port work by default, includ
 at `http://localhost:6274`. Setting an explicit origin list replaces that loopback default.
 Allowed preflights need no credentials; actual MCP requests always require authentication.
 `wait_for_message` holds a request open for up to
-`FMSG_MCP_WAIT_MAX_SECONDS` (230), so give the proxy an idle timeout of at least 240 s.
+`FMSG_MCP_WAIT_MAX_SECONDS` (230), so give the proxy an idle timeout of at least 240 s. On SIGTERM
+the server ends open waits with an `interrupted` result that clients resume from, gives other
+requests 5 seconds to finish, and exits, well within a service manager's stop timeout.
 See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback deployment with Caddy.
 
 ## Tools

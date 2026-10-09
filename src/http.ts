@@ -22,6 +22,8 @@ import { safeErrorMessage } from "./client/redact.js";
 import { isLoopbackHost, normalizeOrigin } from "./client/url.js";
 
 export const MCP_PATH = "/mcp";
+/** How long close() lets in-flight requests finish (waits end at once) before cutting them off. */
+export const SHUTDOWN_GRACE_MS = 5000;
 
 const CORS_METHODS = ["POST", "GET", "DELETE"];
 const CORS_HEADERS = ["authorization", "content-type", "accept", "mcp-protocol-version", "mcp-method", "mcp-name", "mcp-session-id", "last-event-id"];
@@ -70,7 +72,8 @@ export async function sendWebResponse(res: ServerResponse, response: Response, f
         if (rejected) { await reader.cancel(); return await sendWebResponse(res, rejected); }
         res.writeHead(response.status, headers);
       }
-      if (done || res.destroyed) break;
+      // A shutdown may already have answered this request with a 503.
+      if (done || res.destroyed || res.writableEnded) break;
       if (!res.write(value)) await new Promise<void>((resolve) => {
         const finish = () => {
           res.off("drain", finish);
@@ -90,13 +93,17 @@ export async function sendWebResponse(res: ServerResponse, response: Response, f
   } finally {
     res.off("close", abort);
     await reader.cancel().catch(() => undefined);
-    if (res.headersSent && !res.destroyed) res.end();
+    if (res.headersSent && !res.destroyed && !res.writableEnded) res.end();
   }
 }
 
 export type HttpServerHandle = {
   server: Server;
-  close: () => Promise<void>;
+  /**
+   * Stop accepting requests, end in-flight waits with an "interrupted" result, give other
+   * requests `graceMs` to finish, then answer any still waiting with 503 and close.
+   */
+  close: (options?: { graceMs?: number }) => Promise<void>;
   /** The OAuth provider when OAuth is configured, otherwise the API-key provider. */
   provider: ApiKeyCallerProvider | OAuthCallerProvider;
   /** Each configured provider; both are set in combined `oauth+api-key` mode. */
@@ -121,22 +128,27 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const publicOrigin = downloadBaseUrl(config) ? new URL(downloadBaseUrl(config)!).origin : undefined;
   const metadataPath = resource ? `/.well-known/oauth-protected-resource${resource.pathname === "/" ? "" : resource.pathname}` : undefined;
   const metadataUrl = resource ? `${resource.origin}${metadataPath}` : "";
+  const shutdown = new AbortController();
   const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => createMcpHandler(({ authInfo }) =>
-    createFmsgMcpServer(provider, config, authInfo ? { address: address(authInfo) } : {}),
+    createFmsgMcpServer(provider, config, { ...(authInfo ? { address: address(authInfo) } : {}), shutdown: shutdown.signal }),
     { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
   );
   const oauthHandler = oauthProvider && mcpHandler(oauthProvider, (authInfo) => String(authInfo.extra?.address ?? ""));
   const apiKeyHandler = apiKeyProvider && mcpHandler(apiKeyProvider, (authInfo) => authInfo.clientId);
-  const active = new Set<AbortController>();
+  const active = new Map<AbortController, { res: ServerResponse; done: Promise<void> }>();
+  const unavailable = (res: ServerResponse) => {
+    res.writeHead(503, { "content-type": "application/json", "retry-after": "5", connection: "close" });
+    res.end(JSON.stringify({ error: "fmsg-mcp is restarting; retry shortly" }));
+  };
 
   const server = createServer((req, res) => {
+    if (shutdown.signal.aborted) return unavailable(res);
     let release: (() => void) | undefined;
     const controller = new AbortController();
-    active.add(controller);
     const abort = () => controller.abort();
     req.once("aborted", abort);
     res.once("close", abort);
-    void (async () => {
+    const done = (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const isDownload = url.pathname.startsWith(`${DOWNLOAD_PATH}/`);
       if (url.pathname === "/healthz") {
@@ -291,23 +303,36 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       req.off("aborted", abort);
       res.off("close", abort);
     });
+    active.set(controller, { res, done });
   });
   // This bounds receiving the request body, not the duration of a wait response.
   server.requestTimeout = 60_000;
   server.headersTimeout = 60_000;
   server.keepAliveTimeout = 65_000;
 
-  const close = async () => {
-    for (const controller of active) controller.abort();
+  let closing: Promise<void> | undefined;
+  const close = ({ graceMs = SHUTDOWN_GRACE_MS }: { graceMs?: number } = {}) => closing ??= (async () => {
+    // Waits answer "interrupted" with a resumable cursor; new requests get 503.
+    shutdown.abort();
+    const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+    server.closeIdleConnections();
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.allSettled([...active.values()].map((a) => a.done)),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, graceMs); }),
+    ]);
+    clearTimeout(timer);
+    for (const [controller, { res }] of active) {
+      if (!res.headersSent && !res.destroyed) unavailable(res);
+      controller.abort();
+    }
     oauthProvider?.close();
     apiKeyProvider?.close();
     await Promise.all([oauthHandler?.close(), apiKeyHandler?.close()]);
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-      // Aborted fetches may open replacement sockets without a request, so
-      // they are absent from `active` and must also be closed on shutdown.
-      server.closeAllConnections();
-    });
-  };
+    // Aborted fetches may open replacement sockets without a request, so
+    // they are absent from `active` and must also be closed on shutdown.
+    server.closeAllConnections();
+    await closed;
+  })();
   return { server, close, provider: (oauthProvider ?? apiKeyProvider)!, providers: { apiKey: apiKeyProvider, oauth: oauthProvider } };
 }

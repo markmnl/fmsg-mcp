@@ -28,7 +28,8 @@ export const registerWaitTools: Register = (server, deps) => {
         "Your own messages, reactions and no-reply messages never qualify; they are listed in skipped. Each call blocks " +
         `at most timeout_seconds (max ${maxWait}); stop looping when the user interrupts or the limits they set are reached. ` +
         "In chat hosts each wait is a model turn: tell the user you are listening and for how long rather than " +
-        "looping silently for long periods.",
+        "looping silently for long periods. Status \"interrupted\" means the server is restarting: call again with the " +
+        "returned after_id; no messages are lost.",
       inputSchema: z.object({
         after_id: idSchema.optional().describe(
           "only messages with a greater id qualify; pass the after_id from the previous result. Omit on the first call to wait for messages arriving from now on",
@@ -40,7 +41,7 @@ export const registerWaitTools: Register = (server, deps) => {
         include_thread: z.boolean().default(true).describe("include the assembled thread context of the newest message"),
       }),
       outputSchema: z.object({
-        status: z.enum(["message", "timeout"]),
+        status: z.enum(["message", "timeout", "interrupted"]).describe("interrupted: the server is restarting; call again with after_id"),
         after_id: z.string().describe("pass this as after_id on the next call"),
         thread_root_id: z.string().nullable(),
         thread_topic: z.string().nullable().describe("the thread root's topic (replies carry none); null when unknown"),
@@ -74,6 +75,7 @@ export const registerWaitTools: Register = (server, deps) => {
             ...(after_id !== undefined ? { afterId: after_id } : {}),
             ...(thread_of !== undefined ? { threadOf: thread_of } : {}),
             ...(from !== undefined ? { from: resolveAddress(from, resolverFor(deps, caller)).address } : {}),
+            ...(deps.shutdown ? { interrupt: deps.shutdown } : {}),
             timeoutMs: timeout_seconds * 1000,
             settleMs: settle_seconds * 1000,
             onTick: (elapsed) => {
@@ -93,7 +95,9 @@ export const registerWaitTools: Register = (server, deps) => {
         );
         const newest = result.messages[result.messages.length - 1];
         const keepWaiting = `call wait_for_message with after_id "${result.after_id}"${thread_of !== undefined ? ` and thread_of "${thread_of}"` : ""} to keep listening`;
-        const next = !newest
+        const next = result.status === "interrupted"
+          ? `The server is restarting; ${keepWaiting}. No messages are lost.`
+          : !newest
           ? `No new message yet; ${keepWaiting}, unless the user's time limit is reached.`
           : newest.terminal
             ? `Message ${newest.id} is terminal and cannot be replied to; ${keepWaiting}.`
@@ -114,6 +118,7 @@ export const registerWaitTools: Register = (server, deps) => {
           ...UNTRUSTED,
         };
         const reactions = reactionLines(result.skipped);
+        if (result.status === "interrupted") return ok(`${next} (after_id ${result.after_id})`, structured);
         if (result.status === "timeout") {
           const waited = `No qualifying message arrived within ${timeout_seconds}s (after_id ${result.after_id}, ${result.transport})${result.note ? `; ${result.note}` : ""}. Call again to keep waiting.`;
           return ok(reactions.length ? `${waited}\n\nSkipped reactions:\n${messageData(reactions.join("\n"))}` : waited, structured);

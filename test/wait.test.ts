@@ -191,6 +191,18 @@ describe("waitForMessage", () => {
     expect(r2.unclassified).toEqual([]);
   });
 
+  it("ends with status interrupted and the caller's cursor on server shutdown", async () => {
+    const seen = fake.seed({ from: BOB, to: [ALICE], data: "seen" });
+    const shutdown = new AbortController();
+    const p = waitForMessage(client, ALICE, opts({ afterId: seen.id, timeoutMs: 10_000, interrupt: shutdown.signal }));
+    await vi.waitFor(() => expect(fake.connectedSockets(ALICE)).toBe(1));
+    shutdown.abort();
+    const r = await p;
+    expect(r).toMatchObject({ status: "interrupted", after_id: seen.id, messages: [] });
+    expect(r.note).toContain("server is restarting");
+    expect((await waitForMessage(client, ALICE, opts({ afterId: seen.id, interrupt: shutdown.signal }))).status).toBe("interrupted");
+  });
+
   it("falls back to polling when the socket cannot open", async () => {
     const p = waitForMessage(client, ALICE, opts({ pollIntervalMs: 100 }), undefined, {
       openSocket: async () => {

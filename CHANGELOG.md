@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Graceful shutdown. On SIGINT/SIGTERM or `HttpServerHandle.close()`, in-flight `wait_for_message`
+  calls return at once with the new status `interrupted`, the caller's `after_id` and a `next`
+  step ("call again with the same after_id; no messages are lost") instead of hanging until the
+  client's own timeout. New requests get `503` with `Retry-After`; other in-flight requests get a
+  5-second grace period, then a `503` if they have not answered. The process exits within a bounded
+  time, and a second signal exits immediately. `close()` accepts `{ graceMs }`.
 - Fix truncated bodies of deflate-compressed messages: `size` is the compressed wire size, so
   `short_text` (a preview of the decoded body) was taken as complete whenever the body compressed
   below it. Such messages now always fetch the full body. `get_message`'s `body_bytes` and
