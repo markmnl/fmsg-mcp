@@ -17,6 +17,9 @@
   padding, or a stray ending are refused with the attachment's name. They used to be skipped
   silently, sending a corrupted file.
 - `send_message` and `reply` descriptions say when inline base64 suits and where large files go.
+  The server instructions say how to send files, naming only the routes the server offers. When
+  a file of about 48 KB or more goes inline as base64 although a better route exists, the result
+  adds a `hint` naming it. A new `send_file` prompt sends files by the best route.
 - `FmsgClient` adds `createDraft()`, `uploadAttachmentStream()`, `deleteAttachment()` and
   `sendDraft()`, and exports `AttachmentChecksumError`; `send()` is their composition.
 - `get_message` text gives the decoded body size next to the stored size for a compressed body

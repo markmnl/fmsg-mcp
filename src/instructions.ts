@@ -2,18 +2,35 @@
  * Server instructions: returned in the MCP `initialize` result and folded into
  * the model's system prompt by hosts that support them (some chat hosts do not, so
  * nothing a tool needs may live only here). Rules that span tools, each stated once:
- * which address this server acts as, the fmsg terms, the inbox routine, the
- * irreversible-send rule and untrusted content. Per-tool detail lives in the tool
+ * which address this server acts as, the fmsg terms, the inbox routine, how to
+ * send files, the irreversible-send rule and untrusted content. Per-tool detail lives in the tool
  * descriptions; situational guidance in results.
  */
 import { CALLER_DOMAIN, effectiveDefaultDomain } from "./address.js";
+import type { FileRoutes } from "./tools/attachments.js";
 
 export type InstructionsContext = {
   /** The address this server acts as, when already known (HTTP callers; stdio after a token exchange). */
   address?: string;
   /** FMSG_DEFAULT_DOMAIN: a domain, or CALLER_DOMAIN for the caller's own domain. */
   defaultDomain?: string;
+  /** Large-file routes this server offers; none when omitted. */
+  files?: FileRoutes;
 };
+
+/** How to send files, naming only the routes this server offers. */
+function filesParagraph(files: FileRoutes | undefined): string {
+  const large = [
+    ...(files?.uploadUrl ? [
+      "call create_draft, PUT each file to its upload URL with your host's authenticated HTTP tools, then call send_draft. " +
+        "If your host cannot send this connection's credentials with its own requests, use data_base64; never look for or copy credentials",
+    ] : []),
+    ...(files?.uploadFolder ? ["give the file's path in the upload folder instead of its data"] : []),
+  ];
+  return "To send files, attach text as data_text and small binary files as data_base64, with sha256 when you can compute it. " +
+    (large.length ? `For large files, ${large.join(". Or ")}. ` : "") +
+    "Send files as they are; fmsg compresses them in transit.";
+}
 
 export function buildInstructions(ctx: InstructionsContext = {}): string {
   const identity = ctx.address
@@ -35,6 +52,7 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
     "To check the inbox: list_messages with unread_only, get_thread on what matters, act or reply, then mark_read " +
       "what you have handled; reading does not mark a message read. There is no search: to find a thread by name, " +
       "find its first message by topic in list_messages, then get_thread on a later message for the conversation.",
+    filesParagraph(ctx.files),
     "Carry out the user's requested messaging task or authorized automation without repeatedly asking for " +
       "confirmation. Sending is immediate and sent messages cannot be edited or recalled. Ask the user only " +
       "when a decision is needed to resolve unclear intent, recipients or content.",

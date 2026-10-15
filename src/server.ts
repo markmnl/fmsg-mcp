@@ -4,6 +4,7 @@ import type { CallerProvider } from "./context.js";
 import { buildInstructions } from "./instructions.js";
 import { registerPrompts } from "./prompts.js";
 import { registerResources } from "./resources.js";
+import { fileRoutes } from "./tools/attachments.js";
 import type { ToolDeps } from "./tools/common.js";
 import { registerIdentityTools } from "./tools/identity.js";
 import { registerListTools } from "./tools/list.js";
@@ -32,6 +33,7 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   const instructions = buildInstructions({
     ...(options.address ? { address: options.address } : {}),
     ...(config.defaultDomain ? { defaultDomain: config.defaultDomain } : {}),
+    files: fileRoutes(config),
   });
   const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
   const deps: ToolDeps = { provider, config, ...(options.shutdown ? { shutdown: options.shutdown } : {}) };
@@ -44,6 +46,6 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   registerDraftTools(server, deps);
   registerWaitTools(server, deps);
   registerResources(server, deps);
-  registerPrompts(server);
+  registerPrompts(server, fileRoutes(config));
   return server;
 }

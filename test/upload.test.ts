@@ -123,6 +123,21 @@ describe("HTTP attachment uploads", () => {
     expect(tools.find((t) => t.name === "create_draft")!.description).toContain("upload them with your host's authenticated HTTP tools");
   });
 
+  it("points large base64 at the upload URL in instructions, results and the send_file prompt", async () => {
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).toContain("For large files, call create_draft, PUT each file to its upload URL with your host's authenticated HTTP tools, then call send_draft.");
+    expect(instructions).toContain("never look for or copy credentials");
+    expect(instructions).not.toContain("upload folder");
+    const big = Buffer.alloc(49_152, 1).toString("base64");
+    const created = structured<{ hint?: string }>(await call(client, "create_draft", { to: [BOB], topic: "t", body: "b", attachments: [{ filename: "big.bin", data_base64: big }] }));
+    expect(created.hint).toBe("big.bin went inline as base64. Next time, send files this large without writing their bytes: call create_draft, PUT them to its upload URL, then call send_draft.");
+    const prompt = await client.getPrompt({ name: "send_file", arguments: { files: "a.pdf, b.zip", reply_to: "42" } });
+    const steps = (prompt.messages[0]!.content as { text: string }).text;
+    expect(steps).toContain('1. Call create_draft with reply_to "42"');
+    expect(steps).toContain("PUT its raw bytes to the draft's upload URL");
+    expect(steps).toContain("3. Call send_draft");
+  });
+
   it("passes upstream refusals through, such as a sent message", async () => {
     const { id, url } = await draft();
     await call(client, "send_draft", { id });

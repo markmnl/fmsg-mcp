@@ -4,10 +4,9 @@ import { type AddressResolver, resolveAddress, sameAddress } from "../address.js
 import type { FmsgMessage } from "../client/types.js";
 import type { Config } from "../config.js";
 import type { Caller } from "../context.js";
-import { downloadBaseUrl } from "../download.js";
 import { toolError } from "../errors.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
-import { type PreparedAttachment, attachmentInput, prepareAttachments, sendWithAttachments } from "./attachments.js";
+import { type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { rootTopic } from "./read.js";
 
@@ -18,9 +17,10 @@ export const NO_REPLY = "ask recipients (and their agents) not to reply";
 
 /** How to send files without the model writing their bytes, naming only what this server registered. */
 export function attachmentGuidance(config: Config): string {
+  const routes = fileRoutes(config);
   const large = [
-    ...(downloadBaseUrl(config) ? ["create_draft, which returns an upload URL for your host's authenticated HTTP tools"] : []),
-    ...(config.uploadDir ? ["an attachment path in the upload folder"] : []),
+    ...(routes.uploadUrl ? ["create_draft, which returns an upload URL for your host's authenticated HTTP tools"] : []),
+    ...(routes.uploadFolder ? ["an attachment path in the upload folder"] : []),
   ];
   return "Attachments: inline data_base64 suits small files and data_text suits text; give sha256 when you can compute it. " +
     (large.length ? `For large files use ${large.join(", or ")}. ` : "") +
@@ -78,6 +78,8 @@ export function replyRecipients(
   return result;
 }
 
+export const hintOutput = z.string().optional().describe("for you, not the user: a better way to do this next time");
+
 export const sentOutput = outputObject({
   id: z.string(),
   time: z.string().nullable(),
@@ -93,7 +95,13 @@ export const sentOutput = outputObject({
   thread_topic: z.string().nullable().optional().describe(
     "the thread's topic: the topic sent for a new message; for a reply, the thread root's topic, or null when the root is not visible",
   ),
+  hint: hintOutput,
 });
+
+/** The result text with a hint for the model appended, when there is one. */
+export function withHint(text: string, hint: string | undefined): string {
+  return hint ? `${text}\n\n${hint}` : text;
+}
 
 export function redactionNote(count: number, kinds: string[]): string {
   return count ? `. ${count} secret(s) were redacted before sending (${kinds.join(", ")}).` : ".";
@@ -106,6 +114,7 @@ export function resolvedNote(resolved: Array<{ input: string; address: string }>
 export const registerSendTools: Register = (server, deps) => {
   const attachments = z.array(attachmentInput(deps.config)).optional().describe("files");
   const guidance = attachmentGuidance(deps.config);
+  const routes = fileRoutes(deps.config);
   server.registerTool(
     "send_message",
     {
@@ -131,6 +140,7 @@ export const registerSendTools: Register = (server, deps) => {
       withCaller(deps, ctx, async (caller, signal) => {
         const { to: recipients, resolved } = resolveRecipients(to, resolverFor(deps, caller));
         const outbound = await prepareAttachments(attachments, deps.config);
+        const hint = base64Hint(attachments, routes);
         const sent = await sendWithAttachments(caller.client, { to: recipients, topic, body, type, important, noReply: no_reply }, outbound, signal);
         const structured = {
           id: sent.id,
@@ -145,11 +155,12 @@ export const registerSendTools: Register = (server, deps) => {
           ...(resolved.length ? { resolved } : {}),
           warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
           thread_topic: sent.topic,
+          ...(hint ? { hint } : {}),
         };
         const text = `Sent message ${sent.id} "${sent.topic}" to ${addressList(recipients)} at ${structured.time ?? "?"}` +
           (structured.attachments.length ? ` with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
           redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
-        return ok(text, structured);
+        return ok(withHint(text, hint), structured);
       }),
   );
 
@@ -182,6 +193,7 @@ export const registerSendTools: Register = (server, deps) => {
         if ("content" in target) return target;
         const { to, resolved } = target;
         const outbound = await prepareAttachments(attachments, deps.config);
+        const hint = base64Hint(attachments, routes);
         const sent = await sendWithAttachments(caller.client, { to, pid: parent.id, body, type, important, noReply: no_reply }, outbound, signal);
         const structured = {
           id: sent.id,
@@ -197,11 +209,12 @@ export const registerSendTools: Register = (server, deps) => {
           warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
           // The reply is already sent: a failed topic lookup only leaves the topic unknown.
           thread_topic: await rootTopic(caller.client, parent, signal).catch(() => null),
+          ...(hint ? { hint } : {}),
         };
         const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
         const text = `Sent reply ${sent.id} to message ${parent.id}${topic} for ${addressList(to)} at ${structured.time ?? "?"}` +
           redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
-        return ok(text, structured);
+        return ok(withHint(text, hint), structured);
       }),
   );
 

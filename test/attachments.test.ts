@@ -119,6 +119,16 @@ describe("attachment sources", () => {
     expect(text(await call(h.client, "create_draft", { reply_to: quiet.id, body: "x" }))).toContain("marked no-reply");
   });
 
+  it("gives no base64 hint or large-file route when the server offers none", async () => {
+    const big = Buffer.alloc(49_152, 1).toString("base64");
+    const sent = await call(h.client, "send_message", { to: [BOB], topic: "t", body: "b", attachments: [{ filename: "big.bin", data_base64: big }] });
+    expect(structured(sent).hint).toBeUndefined();
+    const prompt = await h.client.getPrompt({ name: "send_file", arguments: { files: "a.pdf", reply_to: "7" } });
+    const steps = (prompt.messages[0]!.content as { text: string }).text;
+    expect(steps).toContain('1. Call reply with id "7"');
+    expect(steps).toContain("This server has no upload route");
+  });
+
   it("deletes the draft when an inline upload is refused", async () => {
     fake.failNext = { match: /\/attach$/u, status: 413, error: "attachment too large" };
     const result = await call(h.client, "create_draft", { to: [BOB], topic: "big", body: "b", attachments: [{ filename: "a.bin", data_base64: "AAAA" }] });
@@ -178,6 +188,24 @@ describe("upload folder (stdio)", () => {
       expect(text(result), relative).toContain(message);
     }
     expect([...fake.messages.values()].filter((m) => m.from === ALICE)).toEqual([]);
+  });
+
+  it("points large base64 at the upload folder in instructions, results and the send_file prompt", async () => {
+    expect(h.client.getInstructions()).toContain("For large files, give the file's path in the upload folder instead of its data.");
+    expect(h.client.getInstructions()).not.toContain("upload URL");
+    const big = Buffer.alloc(49_152, 1).toString("base64");
+    const sent = await call(h.client, "send_message", { to: [BOB], topic: "t", body: "b",
+      attachments: [{ filename: "big.bin", data_base64: big }, { filename: "small.bin", data_base64: "AAAA" }] });
+    const hint = "big.bin went inline as base64. Next time, send files this large without writing their bytes: give their path in the upload folder instead of data_base64.";
+    expect(structured(sent).hint).toBe(hint);
+    expect(text(sent)).toContain(hint);
+    const small = await call(h.client, "send_message", { to: [BOB], topic: "t", body: "b", attachments: [{ filename: "a.bin", data_base64: "AAAA" }] });
+    expect(structured(small).hint).toBeUndefined();
+    const prompt = await h.client.getPrompt({ name: "send_file", arguments: { files: "report.pdf", to: "bob" } });
+    const steps = (prompt.messages[0]!.content as { text: string }).text;
+    expect(steps).toContain("Send these files over fmsg: report.pdf.");
+    expect(steps).toContain("1. Call send_message to bob, with a short topic");
+    expect(steps).toContain("relative to the upload folder");
   });
 
   it("describes the path source only when the folder is configured", async () => {

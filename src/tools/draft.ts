@@ -3,16 +3,17 @@ import { downloadBaseUrl } from "../download.js";
 import { toolError } from "../errors.js";
 import { addressList, headerValue, isoTime } from "../render.js";
 import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../upload.js";
-import { attachmentInput, draftWithAttachments, prepareAttachments } from "./attachments.js";
+import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, prepareAttachments } from "./attachments.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { rootTopic } from "./read.js";
 import {
-  IMMUTABLE, IMPORTANT, NO_REPLY, redactionNote, replyRecipients, resolveRecipients, resolvedNote, resolvedOutput, sendWarnings,
-  sentAttachments, sentOutput,
+  IMMUTABLE, IMPORTANT, NO_REPLY, hintOutput, redactionNote, replyRecipients, resolveRecipients, resolvedNote, resolvedOutput,
+  sendWarnings, sentAttachments, sentOutput, withHint,
 } from "./send.js";
 
 export const registerDraftTools: Register = (server, deps) => {
   const baseUrl = downloadBaseUrl(deps.config);
+  const routes = fileRoutes(deps.config);
   const largeFiles = [
     ...(baseUrl ? ["upload them with your host's authenticated HTTP tools to the returned upload URL"] : []),
     ...(deps.config.uploadDir ? ["pass a path in the upload folder"] : []),
@@ -56,6 +57,7 @@ export const registerDraftTools: Register = (server, deps) => {
           accepts_encoding: z.array(z.string()).describe("Content-Encoding values accepted; the server decodes them before storing"),
         }).optional().describe("where to upload more attachments; present when this server has a public URL"),
         next: z.string(),
+        hint: hintOutput,
       }),
       annotations: { ...SENDS, destructiveHint: false },
     },
@@ -76,6 +78,7 @@ export const registerDraftTools: Register = (server, deps) => {
           ({ to: recipients, resolved } = resolveRecipients(to!, resolverFor(deps, caller)));
         }
         const outbound = await prepareAttachments(attachments, deps.config);
+        const hint = base64Hint(attachments, routes);
         const draft = await draftWithAttachments(caller.client, {
           to: recipients, body, type, important, noReply: no_reply, ...(pid ? { pid } : { topic: topic ?? "" }),
         }, outbound, signal);
@@ -100,12 +103,13 @@ export const registerDraftTools: Register = (server, deps) => {
           warnings: sendWarnings(draft.redactions, draft.redacted, resolved),
           ...(upload ? { upload } : {}),
           next,
+          ...(hint ? { hint } : {}),
         };
         const what = pid ? `reply to message ${pid}` : `"${headerValue(draft.topic)}"`;
         const text = `Created draft ${draft.id} (${what}) for ${addressList(recipients)}; not sent` +
           (structured.attachments.length ? `, with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
           redactionNote(draft.redactions, draft.redacted) + resolvedNote(resolved) + `\n\n${next}`;
-        return ok(text, structured);
+        return ok(withHint(text, hint), structured);
       });
     },
   );

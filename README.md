@@ -63,7 +63,7 @@ claude mcp add fmsg --scope user \
 ```
 
 Then in any session: *"Send @bob@example.com a note about the release"*, *"What's in my fmsg inbox?"*,
-*"Wait for Bob's reply and answer it"*. `/fmsg:chat` and `/fmsg:reply` are available as prompts.
+*"Wait for Bob's reply and answer it"*. `/fmsg:chat`, `/fmsg:reply` and `/fmsg:send_file` are available as prompts.
 
 ### Claude Desktop, Cursor, VS Code and other stdio hosts
 
@@ -170,7 +170,8 @@ required. Releases add fields and values; they do not remove or rename them. Sch
 example "must NOT have additional properties"); remove and re-add the connector once to refresh it.
 
 Resources `fmsg://message/{id}` and `fmsg://thread/{id}` expose the same content to hosts that
-attach resources; prompts `chat` and `reply` script the wait → reply loop and a guided reply.
+attach resources; prompts `chat` and `reply` script the wait → reply loop and a guided reply, and
+`send_file` sends files by the most efficient route the server offers.
 
 ## Configuration
 
@@ -236,6 +237,13 @@ the returned upload URL with the connection's Authorization header (optionally g
 with `x-content-sha256`), then `send_draft`; see
 [attachment uploads](docs/http-deployment.md#attachment-uploads). Send files as they are: fmsg
 compresses message bodies and attachments itself when it sends them.
+
+Models learn the routes from the server instructions and tool descriptions, which name only the
+routes the running server offers. A model that writes a large file as base64 although a better
+route exists gets a `hint` in the result naming it. The `send_file` prompt walks through the best
+route. The upload URL needs a host that can send the MCP connection's credentials with its own
+HTTP requests: scripts, SDK clients, and coding agents given an fmsg API key. Chat hosts usually
+cannot, so for them `data_text` and `data_base64` remain the routes.
 
 The Web API already transfers attachments as raw bytes. Base64 is used only when embedding binary
 content in MCP's JSON results, as required by [MCP binary resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources#binary-content).

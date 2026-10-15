@@ -7,10 +7,37 @@ import * as z from "zod/v4";
 import type { FmsgClient } from "../client/client.js";
 import type { Attachment, DraftInput, DraftResult } from "../client/types.js";
 import type { Config } from "../config.js";
+import { downloadBaseUrl } from "../download.js";
 import { attachmentType } from "../render.js";
 
 export const FILENAME = /^[A-Za-z0-9._-]+$/u;
 const SHA256 = /^[0-9A-Fa-f]{64}$/u;
+
+/** Ways this server can take a file without the model writing its bytes. */
+export type FileRoutes = {
+  /** create_draft returns an HTTP upload URL (HTTP with a public MCP URL). */
+  uploadUrl: boolean;
+  /** Attachments may name a file in FMSG_MCP_UPLOAD_DIR (stdio). */
+  uploadFolder: boolean;
+};
+
+export function fileRoutes(config: Config): FileRoutes {
+  return { uploadUrl: Boolean(downloadBaseUrl(config)), uploadFolder: Boolean(config.uploadDir) };
+}
+
+/** Inline base64 this long (about 48 KB of file) earns a hint about a better route next time. A hint only, never a limit. */
+const BASE64_HINT_CHARS = 64 * 1024;
+
+/** A hint for the model after it wrote a large file as base64 although this server offers a route that avoids it. */
+export function base64Hint(items: AttachmentArgs[] | undefined, routes: FileRoutes): string | undefined {
+  const large = (items ?? []).filter((a) => (a.data_base64?.length ?? 0) >= BASE64_HINT_CHARS).map((a) => a.filename);
+  const better = [
+    ...(routes.uploadUrl ? ["call create_draft, PUT them to its upload URL, then call send_draft"] : []),
+    ...(routes.uploadFolder ? ["give their path in the upload folder instead of data_base64"] : []),
+  ];
+  if (!large.length || !better.length) return undefined;
+  return `${large.join(", ")} went inline as base64. Next time, send files this large without writing their bytes: ${better.join(", or ")}.`;
+}
 
 /** The attachment sources this server accepts; `path` only over stdio with an upload folder. */
 function sources(config: Config): string[] {
