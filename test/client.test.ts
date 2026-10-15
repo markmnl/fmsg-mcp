@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FmsgClient, FmsgHttpError } from "../src/client/client.js";
 import { parseFmsgJson, stringifyWithIds, normalizeMessageId } from "../src/client/message-id.js";
@@ -240,6 +241,23 @@ describe("FmsgClient", () => {
     ).rejects.toMatchObject({ status: 413 });
     const drafts = [...fake.messages.values()].filter((m) => m.from === ALICE && m.time === null);
     expect(drafts.every((d) => d.deleted)).toBe(true);
+  });
+
+  it("streams uploads as multipart, hashes them and does not replay a consumed body on 401", async () => {
+    const draft = await client.createDraft({ to: [BOB], topic: "stream", body: "b" });
+    const chunks = [Buffer.from("first "), Buffer.from("second")];
+    const stream = () => new ReadableStream<Uint8Array>({ start(c) { for (const chunk of chunks) c.enqueue(chunk); c.close(); } });
+    const uploaded = await client.uploadAttachmentStream(draft.id, { filename: "s.txt", stream: stream(), contentType: "text/plain" });
+    expect(uploaded).toEqual({ filename: "s.txt", size: 12, sha256: createHash("sha256").update("first second").digest("hex") });
+    const stored = fake.messages.get(draft.id)!.attachments[0]!;
+    expect(stored.data.toString()).toBe("first second");
+    expect(stored.type).toBe("text/plain");
+
+    fake.rejectNextProtected = true;
+    const before = fake.requests.length;
+    await expect(client.uploadAttachmentStream(draft.id, { filename: "t.txt", stream: stream() })).rejects.toMatchObject({ status: 401 });
+    expect(fake.requests.slice(before).filter((r) => r.path.endsWith("/attach"))).toHaveLength(1);
+    await expect(client.uploadAttachmentStream(draft.id, { filename: "../x", stream: stream() })).rejects.toThrow("letters, digits");
   });
 
   it("keeps the token's address case so from matches the authenticated user", async () => {

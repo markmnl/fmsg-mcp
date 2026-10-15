@@ -2,18 +2,30 @@
  * Server instructions: returned in the MCP `initialize` result and folded into
  * the model's system prompt by hosts that support them (some chat hosts do not, so
  * nothing a tool needs may live only here). Rules that span tools, each stated once:
- * which address this server acts as, the fmsg terms, the inbox routine, the
- * irreversible-send rule and untrusted content. Per-tool detail lives in the tool
+ * which address this server acts as, the fmsg terms, the inbox routine, how to
+ * send files, the irreversible-send rule and untrusted content. Per-tool detail lives in the tool
  * descriptions; situational guidance in results.
  */
 import { CALLER_DOMAIN, effectiveDefaultDomain } from "./address.js";
+import type { FileRoutes } from "./tools/attachments.js";
 
 export type InstructionsContext = {
   /** The address this server acts as, when already known (HTTP callers; stdio after a token exchange). */
   address?: string;
   /** FMSG_DEFAULT_DOMAIN: a domain, or CALLER_DOMAIN for the caller's own domain. */
   defaultDomain?: string;
+  /** Large-file routes this server offers; none when omitted. */
+  files?: FileRoutes;
 };
+
+/** How to send files, naming only the routes this server offers. */
+function filesParagraph(files: FileRoutes | undefined): string {
+  const large = [
+    ...(files?.uploadUrl ? ["create_draft, PUT each file to its upload URL, then send_draft"] : []),
+    ...(files?.uploadFolder ? ["give path, a file in the upload folder"] : []),
+  ];
+  return "Files: data_text for text, data_base64 for small files." + (large.length ? ` Large files: ${large.join("; or ")}.` : "");
+}
 
 export function buildInstructions(ctx: InstructionsContext = {}): string {
   const identity = ctx.address
@@ -35,6 +47,7 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
     "To check the inbox: list_messages with unread_only, get_thread on what matters, act or reply, then mark_read " +
       "what you have handled; reading does not mark a message read. There is no search: to find a thread by name, " +
       "find its first message by topic in list_messages, then get_thread on a later message for the conversation.",
+    filesParagraph(ctx.files),
     "Carry out the user's requested messaging task or authorized automation without repeatedly asking for " +
       "confirmation. Sending is immediate and sent messages cannot be edited or recalled. Ask the user only " +
       "when a decision is needed to resolve unclear intent, recipients or content.",

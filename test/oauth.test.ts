@@ -322,6 +322,34 @@ describe("HTTP OAuth", () => {
     expect(api.requests).toHaveLength(0);
   });
 
+  it("uploads into a draft with write scope and the exchanged upstream token", async () => {
+    const token = await idp.token();
+    const client = await connect(token);
+    const draft = structured<{ draft_id: string; upload: { url_template: string } }>(await call(client, "create_draft", { to: [BOB], topic: "t", body: "b" }));
+    const url = `${base}${new URL(draft.upload.url_template.replace("{filename}", "a.bin")).pathname}`;
+    expect(draft.upload.url_template).toBe(`${idp.config.resourceUrl}/drafts/${draft.draft_id}/attachments/{filename}`);
+    const bytes = Buffer.from([0, 255, 1]);
+    const response = await fetch(url, { method: "PUT", body: bytes, headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(201);
+    expect(api.messages.get(draft.draft_id)!.attachments[0]!.data).toEqual(bytes);
+    for (const req of api.requests) expect(req.authorization).toBe(`Bearer ${idp.exchanges[0]!.token}`);
+  });
+
+  it("requires a valid OAuth token and write scope for uploads before exchange", async () => {
+    const url = `${base}/mcp/drafts/123/attachments/a.bin`;
+    for (const token of [undefined, "invalid"]) {
+      const response = await fetch(url, { method: "PUT", body: "x", headers: token ? { authorization: `Bearer ${token}` } : {} });
+      expect(response.status).toBe(401);
+      await response.body?.cancel();
+    }
+    const response = await fetch(url, { method: "PUT", body: "x", headers: { authorization: `Bearer ${await idp.token({ scope: "fmsg:read" })}` } });
+    expect(response.status).toBe(403);
+    expect(response.headers.get("www-authenticate")).toContain('scope="fmsg:write"');
+    await response.body?.cancel();
+    expect(idp.exchanges).toHaveLength(0);
+    expect(api.requests).toHaveLength(0);
+  });
+
   it("propagates upstream download scope denial and rechecks a revoked grant on token renewal", async () => {
     const message = api.seed({ from: ALICE, to: [ALICE], attachments: [{ filename: "file.bin", data: Buffer.from([255]) }] });
     const token = await idp.token();

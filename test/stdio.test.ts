@@ -38,7 +38,7 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
     delete env.FMSG_API_KEY;
     await bare.connect(new StdioClientTransport({ command: process.execPath, args: [entry], env, stderr: "pipe" }));
     try {
-      expect((await bare.listTools()).tools.length).toBe(14);
+      expect((await bare.listTools()).tools.length).toBe(17);
       const r = await call(bare, "whoami");
       expect(r.isError).toBe(true);
       expect(text(r)).toContain("FMSG_API_URL and FMSG_API_KEY");
@@ -49,7 +49,7 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
 
   it("lists tools and answers whoami over a real child process", async () => {
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(14);
+    expect(tools.length).toBe(17);
     expect(client.getInstructions()).toContain(`you are acting as ${ALICE}`);
     expect(structured<{ address: string }>(await call(client, "whoami")).address).toBe(ALICE);
     fake.seed({ from: BOB, to: [ALICE], topic: "stdio", data: "over stdio" });
@@ -65,7 +65,7 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
     const env = { ...process.env, ...settings, FMSG_ALLOW_INSECURE_HTTP: "0" } as Record<string, string>;
     await unconfigured.connect(new StdioClientTransport({ command: process.execPath, args: [entry], env, stderr: "pipe" }));
     try {
-      expect((await unconfigured.listTools()).tools.length).toBe(14);
+      expect((await unconfigured.listTools()).tools.length).toBe(17);
       const result = await call(unconfigured, "whoami");
       expect(result.isError).toBe(true);
       expect(text(result)).toContain(hint);

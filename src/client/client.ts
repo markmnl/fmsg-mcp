@@ -5,17 +5,31 @@ import { normalizeApiUrl } from "./url.js";
 import { readBytes, withIdleTimeout } from "./stream.js";
 import { FmsgHttpError, readError } from "./errors.js";
 import { ApiKeyTokenProvider, type TokenProvider } from "./token-provider.js";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AccessToken,
   Attachment,
+  DraftInput,
+  DraftResult,
   FmsgMessage,
+  OutboundAttachment,
   ReactResult,
   SendInput,
   SendResult,
+  StreamAttachment,
   Thread,
+  UploadedAttachment,
 } from "./types.js";
 
 export { FmsgHttpError } from "./errors.js";
+
+/** An uploaded attachment's bytes did not match the sha256 the sender gave; the attachment was removed again. */
+export class AttachmentChecksumError extends Error {
+  constructor(readonly filename: string, readonly expected: string, readonly actual: string) {
+    super(`attachment ${filename}: sha256 mismatch (expected ${expected}, got ${actual}); the attachment was not kept`);
+    this.name = "AttachmentChecksumError";
+  }
+}
 
 export type FetchLike = typeof fetch;
 
@@ -146,14 +160,18 @@ export class FmsgClient {
     provider?.close?.();
   }
 
-  private async request(path: string, init: RequestInit = {}, retry401 = true, streaming = false): Promise<Response> {
+  /**
+   * `timing`: "total" bounds the whole request; "headers" bounds only the wait for response headers (streamed
+   * downloads); "caller" leaves deadlines to the caller's signal (streamed uploads with their own idle budget).
+   */
+  private async request(path: string, init: RequestInit = {}, retry401 = true, timing: "total" | "headers" | "caller" = "total"): Promise<Response> {
     init.signal?.throwIfAborted();
     const token = await this.getToken(false, init.signal ?? undefined);
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${token.accessToken}`);
     const headerDeadline = new AbortController();
-    const headerTimer = streaming ? setTimeout(() => headerDeadline.abort(new DOMException("attachment response headers timed out", "TimeoutError")), this.options.timeoutMs ?? 60_000).unref() : undefined;
-    const timeout = streaming ? headerDeadline.signal : AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
+    const headerTimer = timing === "headers" ? setTimeout(() => headerDeadline.abort(new DOMException("attachment response headers timed out", "TimeoutError")), this.options.timeoutMs ?? 60_000).unref() : undefined;
+    const timeout = timing === "total" ? AbortSignal.timeout(this.options.timeoutMs ?? 60_000) : headerDeadline.signal;
     const signal = AbortSignal.any([this.lifetime.signal, timeout, ...(init.signal ? [init.signal] : [])]);
     try {
       signal.throwIfAborted();
@@ -164,7 +182,7 @@ export class FmsgClient {
         if (!this.token || this.token === token || this.token.expiresAtMs <= Date.now()) {
           await this.getToken(true, init.signal ?? undefined);
         }
-        return this.request(path, init, false, streaming);
+        return this.request(path, init, false, timing);
       }
       if (!response.ok) {
         const { message, code } = await readError(response);
@@ -319,7 +337,7 @@ export class FmsgClient {
     const response = await this.request(
       `/fmsg/${encodeURIComponent(mid)}/attach/${encodeURIComponent(filename)}`,
       { signal },
-      true, true,
+      true, "headers",
     );
     const contentType = response.headers.get("content-type") ?? undefined;
     if (!response.body) throw new Error("attachment response has no body");
@@ -333,7 +351,7 @@ export class FmsgClient {
 
   // ── Sending ───────────────────────────────────────────────────────────
 
-  private async createDraft(input: SendInput, from: string): Promise<string> {
+  private async postDraft(input: DraftInput, from: string): Promise<string> {
     const body: Record<string, unknown> = {
       version: 1,
       from,
@@ -356,11 +374,30 @@ export class FmsgClient {
     return normalizeMessageId(result.id);
   }
 
-  async uploadAttachment(draftId: string, attachment: { filename: string; data: Uint8Array; contentType?: string }, signal?: AbortSignal): Promise<Attachment> {
+  /**
+   * Create an unsent draft. Selected secret patterns in body/topic are replaced, as for send(); the result
+   * reports them and the stored topic. Upload attachments, then sendDraft() or deleteMessage().
+   */
+  async createDraft(input: DraftInput): Promise<DraftResult> {
+    if (input.to.length === 0) throw new Error("at least one recipient is required");
+    if (input.pid && input.topic) throw new Error("a reply (pid) cannot carry a topic");
+    const from = await this.address(input.signal);
+    const body = redactSecrets(input.body);
+    const topic = redactSecrets(input.pid ? "" : (input.topic ?? ""));
+    const id = await this.postDraft({ ...input, body: body.text, topic: topic.text }, from);
+    return {
+      id,
+      redactions: body.count + topic.count,
+      redacted: [...new Set([...topic.kinds, ...body.kinds])].sort(),
+      topic: topic.text,
+    };
+  }
+
+  async uploadAttachment(draftId: string, attachment: OutboundAttachment, signal?: AbortSignal): Promise<Attachment> {
     const form = new FormData();
     const blob = new Blob([Buffer.from(attachment.data)], { type: attachment.contentType ?? "application/octet-stream" });
     form.append("file", blob, attachment.filename);
-    const response = await this.request(`/fmsg/${encodeURIComponent(draftId)}/attach`, {
+    const response = await this.request(`/fmsg/${encodeURIComponent(normalizeMessageId(draftId))}/attach`, {
       method: "POST",
       body: form,
       ...(signal ? { signal } : {}),
@@ -370,37 +407,113 @@ export class FmsgClient {
   }
 
   /**
+   * Stream an attachment into a draft without buffering it, hashing the bytes on the way. Each chunk resets an idle
+   * budget (the client timeout, default 60 s), so a slow but progressing upload is not cut off. The upload is not
+   * retried on 401 because a consumed stream cannot be replayed. When `expectedSha256` is given and differs, the
+   * attachment is removed again and AttachmentChecksumError is thrown.
+   */
+  async uploadAttachmentStream(draftId: string, attachment: StreamAttachment, signal?: AbortSignal): Promise<UploadedAttachment> {
+    const mid = normalizeMessageId(draftId);
+    if (!/^[A-Za-z0-9._-]+$/u.test(attachment.filename) || /^\.+$/u.test(attachment.filename)) {
+      throw new Error("attachment filenames may contain only letters, digits, dot, underscore and hyphen");
+    }
+    const contentType = attachment.contentType ?? "application/octet-stream";
+    if (!/^[\x20-\x7e]+$/u.test(contentType)) throw new Error("attachment content type must be printable ASCII");
+    const expected = attachment.expectedSha256?.toLowerCase();
+    const boundary = `fmsg-mcp-${randomUUID()}`;
+    const encoder = new TextEncoder();
+    const head = encoder.encode(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${attachment.filename}"\r\n` +
+      `Content-Type: ${contentType}\r\n\r\n`);
+    const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
+    const idleMs = this.options.timeoutMs ?? 60_000;
+    const deadline = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    const arm = (reason: string) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => deadline.abort(new DOMException(reason, "TimeoutError")), idleMs).unref();
+    };
+    const hash = createHash("sha256");
+    const reader = attachment.stream.getReader();
+    let stage = "head" as "head" | "data" | "done";
+    let size = 0;
+    let sourceError: unknown;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (stage === "head") { stage = "data"; controller.enqueue(head); return; }
+        arm("attachment upload stalled waiting for data");
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try { chunk = await reader.read(); }
+        catch (error) { sourceError = error; throw error; }
+        if (!chunk.done) {
+          hash.update(chunk.value);
+          size += chunk.value.byteLength;
+          controller.enqueue(chunk.value);
+          return;
+        }
+        stage = "done";
+        controller.enqueue(tail);
+        controller.close();
+        arm("attachment upload response timed out");
+      },
+      cancel: (reason) => reader.cancel(reason),
+    });
+    arm("attachment upload stalled waiting for data");
+    try {
+      const response = await this.request(`/fmsg/${encodeURIComponent(mid)}/attach`, {
+        method: "POST",
+        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+        body,
+        duplex: "half",
+        signal: AbortSignal.any([deadline.signal, ...(signal ? [signal] : [])]),
+      } as RequestInit, false, "caller");
+      const result = parseFmsgJson<{ filename?: string; size?: number }>(await response.text());
+      const uploaded = { filename: result.filename ?? attachment.filename, size: result.size ?? size, sha256: hash.digest("hex") };
+      if (expected && expected !== uploaded.sha256) {
+        await this.deleteAttachment(mid, uploaded.filename).catch(() => undefined);
+        throw new AttachmentChecksumError(attachment.filename, expected, uploaded.sha256);
+      }
+      return uploaded;
+    } catch (error) {
+      // Report the source's failure (such as invalid compressed data) rather than fetch's wrapper.
+      throw sourceError ?? error;
+    } finally {
+      clearTimeout(timer);
+      if (stage !== "done") await reader.cancel().catch(() => undefined);
+    }
+  }
+
+  async deleteAttachment(draftId: string, filename: string, signal?: AbortSignal): Promise<void> {
+    const mid = normalizeMessageId(draftId);
+    await this.request(`/fmsg/${encodeURIComponent(mid)}/attach/${encodeURIComponent(filename)}`, { method: "DELETE", ...(signal ? { signal } : {}) });
+  }
+
+  /** Send a draft created with createDraft(). The host validates it; a refusal leaves it a draft. */
+  async sendDraft(id: string, signal?: AbortSignal): Promise<{ id: string; time: number | null }> {
+    const mid = normalizeMessageId(id);
+    const response = await this.request(`/fmsg/${encodeURIComponent(mid)}/send`, {
+      method: "POST",
+      ...(signal ? { signal } : {}),
+    });
+    const result = parseFmsgJson<{ id?: unknown; time?: number | null }>(await response.text());
+    return { id: result.id === undefined || result.id === null ? mid : normalizeMessageId(result.id), time: result.time ?? null };
+  }
+
+  /**
    * Draft → attach → send. Selected secret patterns in body/topic are replaced;
    * the result reports their count and the sent topic. Attachments are unchanged.
    * The draft is deleted if any step after creation fails.
    */
   async send(input: SendInput): Promise<SendResult> {
-    if (input.to.length === 0) throw new Error("at least one recipient is required");
-    if (input.pid && input.topic) throw new Error("a reply (pid) cannot carry a topic");
-    const from = await this.address(input.signal);
-    const body = redactSecrets(input.body);
-    const topic = redactSecrets(input.pid ? "" : (input.topic ?? ""));
-    const draftId = await this.createDraft({ ...input, body: body.text, topic: topic.text }, from);
+    const draft = await this.createDraft(input);
     try {
       const attachments: Attachment[] = [];
       for (const attachment of input.attachments ?? []) {
-        attachments.push(await this.uploadAttachment(draftId, attachment, input.signal));
+        attachments.push(await this.uploadAttachment(draft.id, attachment, input.signal));
       }
-      const response = await this.request(`/fmsg/${encodeURIComponent(draftId)}/send`, {
-        method: "POST",
-        ...(input.signal ? { signal: input.signal } : {}),
-      });
-      const result = parseFmsgJson<{ id?: unknown; time?: number | null }>(await response.text());
-      return {
-        id: result.id === undefined || result.id === null ? draftId : normalizeMessageId(result.id),
-        time: result.time ?? null,
-        attachments,
-        redactions: body.count + topic.count,
-        redacted: [...new Set([...topic.kinds, ...body.kinds])].sort(),
-        topic: topic.text,
-      };
+      const sent = await this.sendDraft(draft.id, input.signal);
+      return { ...sent, attachments, redactions: draft.redactions, redacted: draft.redacted, topic: draft.topic };
     } catch (error) {
-      await this.deleteMessage(draftId).catch(() => undefined);
+      await this.deleteMessage(draft.id).catch(() => undefined);
       throw error;
     }
   }

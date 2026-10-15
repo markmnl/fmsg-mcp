@@ -2,7 +2,9 @@
  * End-to-end against two real fmsg stacks (see .github/scripts/run-fmsg-docker-e2e.sh).
  * alice lives on one host, bob and carol on another, so every send crosses hosts.
  */
+import { createHash, randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { FmsgClient } from "../src/client/client.js";
@@ -126,6 +128,30 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
       expect(download.status).toBe(200);
       expect(download.headers.get("content-disposition")).toContain("attachment;");
       expect(Buffer.from(await download.arrayBuffer())).toEqual(bytes);
+
+      // Upload path: a real draft and compressed PUTs checked by sha256.
+      const upload = async (draftId: string, template: string, filename: string, data: Buffer) => fetch(template.replace("{filename}", filename), {
+        method: "PUT", body: gzipSync(data), headers: {
+          authorization: `Bearer ${env("FMSG_E2E_ALICE_API_KEY")}`, "content-encoding": "gzip",
+          "x-content-sha256": createHash("sha256").update(data).digest("hex") } });
+      const newDraft = async (topic: string) => structured<{ draft_id: string; upload: { url_template: string } }>(
+        await call(client, "create_draft", { to: [BOB], topic: `${topic} ${token}`, body: "uploaded attachment" }));
+      // A 2 MB file streams into the draft; the test stack's per-message limit is too small to send it.
+      const large = randomBytes(2 * 1024 * 1024);
+      const largeDraft = await newDraft("large upload");
+      const largeUpload = await upload(largeDraft.draft_id, largeDraft.upload.url_template, "large.bin", large);
+      expect(largeUpload.status).toBe(201);
+      expect(await largeUpload.json()).toMatchObject({ size: large.byteLength, sha256: createHash("sha256").update(large).digest("hex") });
+      expect(structured(await call(client, "delete_draft", { id: largeDraft.draft_id }))).toMatchObject({ deleted: true });
+      // A file within the limit is uploaded, sent with send_draft and downloaded unchanged.
+      const small = randomBytes(4096);
+      const draft = await newDraft("upload");
+      expect((await upload(draft.draft_id, draft.upload.url_template, "small.bin", small)).status).toBe(201);
+      const sentDraft = structured<{ id: string; attachments: Array<{ filename: string; size: number }> }>(await call(client, "send_draft", { id: draft.draft_id }));
+      expect(sentDraft.attachments).toMatchObject([{ filename: "small.bin", size: small.byteLength }]);
+      const smallLink = structured<{ download_url: string }>(await call(client, "get_attachment_download_url", { id: sentDraft.id, filename: "small.bin" }));
+      const smallDownload = await fetch(smallLink.download_url, { headers: { authorization: `Bearer ${env("FMSG_E2E_ALICE_API_KEY")}` } });
+      expect(Buffer.from(await smallDownload.arrayBuffer()).equals(small)).toBe(true);
     } finally {
       await client.close();
       await http.close();

@@ -63,7 +63,7 @@ claude mcp add fmsg --scope user \
 ```
 
 Then in any session: *"Send @bob@example.com a note about the release"*, *"What's in my fmsg inbox?"*,
-*"Wait for Bob's reply and answer it"*. `/fmsg:chat` and `/fmsg:reply` are available as prompts.
+*"Wait for Bob's reply and answer it"*. `/fmsg:chat`, `/fmsg:reply` and `/fmsg:send_file` are available as prompts.
 
 ### Claude Desktop, Cursor, VS Code and other stdio hosts
 
@@ -136,6 +136,9 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `get_thread` | The lineage from the thread root to a message (`scope: "lineage"`; other replies in the thread are not included), with gaps for messages you cannot see, per-message flags and added recipients, the root's `thread_topic`, and a `next` step that never suggests replying to a terminal or no-reply message |
 | `send_message` | Start a new thread; sends immediately (fmsg messages are immutable) |
 | `reply` | Reply into a thread; reply-all by default, refuses terminal and no-reply parents |
+| `create_draft` | Create an unsent message or reply (`reply_to`) that other fmsg clients can see; over HTTP with a public MCP URL, returns an authenticated upload URL for large attachments |
+| `send_draft` | Send a draft, with its attachments |
+| `delete_draft` | Discard an unsent draft |
 | `add_recipients` | Add `recipients` to a sent message (`add_to` is a deprecated alias) |
 | `react` | Set or clear your emoji reaction |
 | `mark_read` | Mark received messages read |
@@ -167,7 +170,8 @@ required. Releases add fields and values; they do not remove or rename them. Sch
 example "must NOT have additional properties"); remove and re-add the connector once to refresh it.
 
 Resources `fmsg://message/{id}` and `fmsg://thread/{id}` expose the same content to hosts that
-attach resources; prompts `chat` and `reply` script the wait → reply loop and a guided reply.
+attach resources; prompts `chat` and `reply` script the wait → reply loop and a guided reply, and
+`send_file` sends files by the most efficient route the server offers.
 
 ## Configuration
 
@@ -177,11 +181,12 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_API_KEY` | — | `fmsgk_…` key; stdio mode only |
 | `FMSG_API_PUBLIC_URL` | `FMSG_API_URL` (HTTP mode: only if HTTPS) | Web API URL reported to users by `whoami`; never used for requests. Set it when the server reaches the Web API at an internal address. Without it, HTTP mode reports no URL for a cleartext `FMSG_API_URL`. Validated like `FMSG_API_URL` |
 | `FMSG_MCP_AUTH_MODE` | `api-key` | HTTP authentication: `api-key`, `oauth`, or `oauth+api-key` to accept both on one endpoint; see [OAuth settings](docs/oauth.md#operator-configuration) and [combined mode](docs/oauth.md#combined-oauth-and-api-key-mode) |
-| `FMSG_MCP_PUBLIC_URL` | OAuth resource URL, otherwise unset | Public MCP endpoint, including `/mcp`; enables the HTTP download-link tool. HTTPS required except loopback; when OAuth is enabled must equal `FMSG_MCP_OAUTH_RESOURCE_URL` |
+| `FMSG_MCP_PUBLIC_URL` | OAuth resource URL, otherwise unset | Public MCP endpoint, including `/mcp`; enables the HTTP download-link tool and draft upload URLs. HTTPS required except loopback; when OAuth is enabled must equal `FMSG_MCP_OAUTH_RESOURCE_URL` |
 | `FMSG_ALLOW_INSECURE_HTTP` | disabled | Set to `1` only to permit cleartext API access on a trusted development/private network; loopback HTTP is allowed by default |
 | `FMSG_DEFAULT_DOMAIN` | — | Lets short names resolve: `bob` → `@bob@<domain>`. `caller` resolves them on the domain of the address the server acts as for each request, so `@mark@example.org` gets `@bob@example.org`; directory entries still take precedence |
 | `FMSG_DIRECTORY` | — | JSON file mapping short names to full addresses |
 | `FMSG_MCP_DOWNLOAD_DIR` | — | Enable `save_attachment` in stdio; folder for new files named from message ID and filename |
+| `FMSG_MCP_UPLOAD_DIR` | — | Allow attachment `path` arguments in stdio: files in this folder (or below it) are read by the server instead of written out by the model |
 | `FMSG_MCP_WAIT_MAX_SECONDS` | `230` | Cap on one `wait_for_message` call |
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
 | `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
@@ -209,11 +214,36 @@ For remote file downloads, call `get_attachment_download_url` with the message I
 It returns metadata and an HTTPS `resource_link`; your AI host downloads the original bytes using
 the existing MCP connection's Authorization header. API-key operators enable the tool with
 `FMSG_MCP_PUBLIC_URL=https://mcp.example.com/mcp`; OAuth deployments reuse their configured resource
-URL automatically. The [reverse proxy must forward the attachment route](docs/http-deployment.md#binary-attachment-downloads).
+URL automatically. See [Binary attachment downloads](docs/http-deployment.md#binary-attachment-downloads).
 Links contain no credentials and grant no access by themselves. The host must support authenticated
 HTTP downloads; an ordinary browser click without the header returns 401. Use inline downloads when
 that host capability is unavailable. Downloads stream without the inline size budget, using the
 original Content-Type and download filename. No files are stored on the MCP server.
+
+### Sending attachments
+
+`send_message`, `reply` and `create_draft` take each attachment as exactly one of:
+
+- `data_base64`: base64 written by the model; fine for small files. Decoding is strict: a character
+  outside the base64 alphabet, a bad length or padding, or a stray ending is refused with the
+  attachment's name, rather than sent as a corrupted file.
+- `data_text`: text, sent as its UTF-8 bytes; no base64 overhead.
+- `path` (stdio with `FMSG_MCP_UPLOAD_DIR`): a file in that folder, streamed by the server. Paths
+  are relative to the folder, and a path or symlink that leads outside it is refused.
+
+Add `sha256` (hex) to any attachment and the server checks the bytes against it; a mismatch is
+refused before anything is sent. For large files over HTTP, call `create_draft`, PUT the files to
+the returned upload URL with the connection's Authorization header (optionally gzip-compressed and
+with `x-content-sha256`), then `send_draft`; see
+[attachment uploads](docs/http-deployment.md#attachment-uploads). Send files as they are: fmsg
+compresses message bodies and attachments itself when it sends them.
+
+Models learn the routes from the server instructions and tool descriptions, which name only the
+routes the running server offers. A model that writes a large file as base64 although a better
+route exists gets a `hint` in the result naming it. The `send_file` prompt walks through the best
+route. The upload URL needs a host that can send the MCP connection's credentials with its own
+HTTP requests: scripts, SDK clients, and coding agents given an fmsg API key. Chat hosts usually
+cannot, so for them `data_text` and `data_base64` remain the routes.
 
 The Web API already transfers attachments as raw bytes. Base64 is used only when embedding binary
 content in MCP's JSON results, as required by [MCP binary resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources#binary-content).

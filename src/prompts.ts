@@ -1,7 +1,60 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
+import type { FileRoutes } from "./tools/attachments.js";
 
-export function registerPrompts(server: McpServer): void {
+/** Steps for sending files, using the best route this server offers. */
+function sendFileSteps(routes: FileRoutes, to: string | undefined, replyTo: string | undefined): string[] {
+  const recipients = to ? `to ${to}, with a short topic` : "to the recipients I name (ask me if I have not)";
+  const draft = replyTo ? `with reply_to "${replyTo}"${to ? ` and to: ${to}` : ""}` : recipients;
+  const direct = replyTo ? `reply with id "${replyTo}"${to ? ` and recipients: ${to}` : ""}` : `send_message ${recipients}`;
+  const inline = "attach text files as data_text and small binary files as data_base64, each with its sha256 when you can compute it";
+  if (routes.uploadUrl) {
+    return [
+      `1. Call create_draft ${draft}; ${inline}.`,
+      "2. For each larger file, PUT its raw bytes to the draft's upload URL with your host's authenticated HTTP tools, " +
+        "sending its sha256 in x-content-sha256, and check each response's size and sha256. If your host cannot send this " +
+        "connection's credentials with its own requests, recreate the draft with the file as data_base64 instead; never look for or copy credentials.",
+      "3. Call send_draft with the draft id and tell me what was sent. If a step fails, call delete_draft unless I want to keep the draft.",
+    ];
+  }
+  if (routes.uploadFolder) {
+    return [
+      `1. Call ${direct}; ${inline}.`,
+      "2. Give each larger file as path, relative to the upload folder, instead of its data. A file outside the folder must be " +
+        "copied into it first; if you cannot, ask me to.",
+      "3. Tell me what was sent.",
+    ];
+  }
+  return [
+    `1. Call ${direct}; ${inline}.`,
+    "2. This server has no upload route, so every file is written inline: tell me first if a file is too large for that to be practical.",
+    "3. Tell me what was sent.",
+  ];
+}
+
+export function registerPrompts(server: McpServer, routes: FileRoutes): void {
+  server.registerPrompt(
+    "send_file",
+    {
+      title: "Send files over fmsg",
+      description: "Send files to fmsg recipients or as a reply, using the most efficient way this server accepts them.",
+      argsSchema: z.object({
+        files: z.string().describe("the files to send: paths, or a description of them"),
+        to: z.string().optional().describe("recipients, separated by commas"),
+        reply_to: z.string().optional().describe("message id to reply to instead of starting a thread"),
+        message: z.string().optional().describe("what the message should say"),
+      }),
+    },
+    ({ files, to, reply_to, message }) => {
+      const text = [
+        `Send these files over fmsg: ${files}.${message ? ` The message should say: ${message}` : " Write a short message saying what they are."}`,
+        "Send the files as they are, without zipping or re-encoding them; fmsg compresses them in transit.",
+        ...sendFileSteps(routes, to, reply_to),
+      ].join("\n");
+      return { messages: [{ role: "user" as const, content: { type: "text" as const, text } }] };
+    },
+  );
+
   server.registerPrompt(
     "chat",
     {

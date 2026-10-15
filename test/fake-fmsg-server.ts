@@ -72,7 +72,8 @@ function isText(type: string): boolean {
 }
 
 export class FakeFmsgServer {
-  private readonly http = createServer((req, res) => void this.handle(req, res));
+  // An upload the client abandons mid-body ends the request with an error; drop that connection.
+  private readonly http = createServer((req, res) => void this.handle(req, res).catch(() => res.destroy()));
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly sockets = new Map<string, Set<WebSocket>>();
   readonly messages = new Map<string, StoredMessage>();

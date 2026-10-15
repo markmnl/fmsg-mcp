@@ -146,6 +146,11 @@ describe("published output schemas", () => {
     await run(local.client, "send_message", { to: ["bob"], topic: "new", body: "hello",
       attachments: [{ filename: "a.txt", data_base64: Buffer.from("x").toString("base64") }] });
     await run(local.client, "reply", { id: reply.id, body: "thanks" });
+    const draft = structured<{ draft_id: string }>(await run(remote.client, "create_draft", { to: [BOB], topic: "draft", body: "later",
+      attachments: [{ filename: "d.txt", data_text: "draft file" }] }));
+    await run(local.client, "send_draft", { id: draft.draft_id });
+    const discarded = structured<{ draft_id: string }>(await run(local.client, "create_draft", { reply_to: root.id, body: "maybe" }));
+    await run(local.client, "delete_draft", { id: discarded.draft_id });
     await run(local.client, "list_sent", { include_reactions: true });
     await run(local.client, "wait_for_message", { after_id: "0", timeout_seconds: 1, settle_seconds: 0 });
     const newest = (await local.fmsg.listInbox(1, 0))[0]!.id;
@@ -156,6 +161,7 @@ describe("published output schemas", () => {
     const baseline = JSON.parse(await readFile(new URL("./fixtures/output-schemas-0.2.5.json", import.meta.url), "utf8")) as Record<string, Schema>;
     for (const [name, result] of results) {
       expect(validate(schemas.get(name), result), name).toBeUndefined();
+      if (!baseline[name]) continue;
       expect(validate(withoutClosedObjects(baseline[name]), result), `${name} (0.2.5 ignoring unknown properties)`).toBeUndefined();
       if (UNCHANGED_SINCE_0_2_5.includes(name)) expect(validate(baseline[name], result), `${name} (0.2.5 as published)`).toBeUndefined();
     }

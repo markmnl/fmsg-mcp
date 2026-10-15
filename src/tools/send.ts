@@ -1,27 +1,41 @@
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { type AddressResolver, resolveAddress, sameAddress } from "../address.js";
-import type { OutboundAttachment } from "../client/types.js";
+import type { FmsgMessage } from "../client/types.js";
+import type { Config } from "../config.js";
+import type { Caller } from "../context.js";
 import { toolError } from "../errors.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
-import { SENDS, type Register, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
+import { type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
+import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { rootTopic } from "./read.js";
 
-const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
+export const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
-const attachmentInput = z.strictObject({
-  filename: z.string().regex(/^[A-Za-z0-9._-]+$/u, "letters, digits, dot, underscore, hyphen only").describe("file name"),
-  data_base64: z.string().min(1).describe("base64 contents; the host sets the size limit"),
-  content_type: z.string().optional().describe("inferred from the filename when omitted"),
-});
+export const IMPORTANT = "mark as important for recipients";
+export const NO_REPLY = "ask recipients (and their agents) not to reply";
 
-const IMPORTANT = "mark as important for recipients";
-const NO_REPLY = "ask recipients (and their agents) not to reply";
+/** The upload-URL route, stated in full wherever a model may read about it. */
+export const UPLOAD_STEPS = "PUT each file's raw bytes to the draft's upload URL with this connection's Authorization header, then call " +
+  "send_draft. If your host cannot send this connection's credentials, use data_base64; never look for or copy credentials";
+
+/** How to send files without the model writing their bytes, naming only what this server registered. */
+export function attachmentGuidance(config: Config): string {
+  const routes = fileRoutes(config);
+  const large = [
+    ...(routes.uploadUrl ? [`use create_draft instead: ${UPLOAD_STEPS}`] : []),
+    ...(routes.uploadFolder ? ["give path, a file in the upload folder"] : []),
+  ];
+  return "Files: data_text for text, data_base64 for small files; add sha256 when you can. " +
+    (large.length ? `For large files, ${large.join(". Or ")}. ` : "") +
+    "Send files as they are; fmsg compresses them.";
+}
 
 /**
  * Resolve recipients, dropping duplicates, and report each name that was not already a full address, so the model
  * can confirm a guessed address with the user.
  */
-function resolveRecipients(names: string[], resolver: AddressResolver): { to: string[]; resolved: Array<{ input: string; address: string }> } {
+export function resolveRecipients(names: string[], resolver: AddressResolver): { to: string[]; resolved: Array<{ input: string; address: string }> } {
   const to: string[] = [];
   const resolved: Array<{ input: string; address: string }> = [];
   for (const name of names) {
@@ -32,12 +46,12 @@ function resolveRecipients(names: string[], resolver: AddressResolver): { to: st
   return { to, resolved };
 }
 
-const resolvedOutput = z.array(outputObject({ input: z.string().optional(), address: z.string().optional() })).optional().describe(
+export const resolvedOutput = z.array(outputObject({ input: z.string().optional(), address: z.string().optional() })).optional().describe(
   "short names and how they resolved, when any were given; confirm with the user if an address looks wrong",
 );
 
 /** Warnings for the model to pass on: what was redacted, and short names that were expanded. */
-function sendWarnings(redactions: number, kinds: string[], resolved: Array<{ input: string; address: string }>): string[] {
+export function sendWarnings(redactions: number, kinds: string[], resolved: Array<{ input: string; address: string }>): string[] {
   const warnings: string[] = [];
   if (redactions) warnings.push(`Tell the user ${redactions} secret(s) (${kinds.join(", ")}) were replaced with placeholders before sending.`);
   if (resolved.length) warnings.push(`Short names were resolved: ${resolved.map((r) => `${r.input} → ${r.address}`).join(", ")}.`);
@@ -45,19 +59,32 @@ function sendWarnings(redactions: number, kinds: string[], resolved: Array<{ inp
 }
 
 /** Sent attachments with the type each was given, or the one its filename implies, in the order every tool lists them. */
-function sentAttachments(sent: Array<{ filename: string; size: number }>, outbound: OutboundAttachment[]) {
+export function sentAttachments(sent: Array<{ filename: string; size: number }>, outbound: Array<Pick<PreparedAttachment, "contentType">> = []) {
   return sortAttachments(sent.map((a, i) => ({ ...a, type: attachmentType(a.filename, outbound[i]?.contentType) })));
 }
 
-function decodeAttachments(items: z.infer<typeof attachmentInput>[] | undefined): OutboundAttachment[] {
-  return (items ?? []).map((a) => {
-    const data = Buffer.from(a.data_base64, "base64");
-    if (data.byteLength === 0) throw new Error(`attachment ${a.filename} is empty or not valid base64`);
-    return { filename: a.filename, data: new Uint8Array(data), ...(a.content_type ? { contentType: a.content_type } : {}) };
-  });
+/**
+ * Who a reply goes to: the given recipients, or everyone on the parent except the caller. Returns an error result
+ * when the parent is terminal, asked for no replies (unless allowed) or has nobody else to reply to.
+ */
+export function replyRecipients(
+  deps: ToolDeps, caller: Caller, parent: FmsgMessage, recipients: string[] | undefined, allowNoReply: boolean,
+): CallToolResult | { to: string[]; resolved: Array<{ input: string; address: string }> } {
+  const id = parent.id;
+  if (parent.terminal) return toolError(`message ${id} is terminal and cannot be replied to`);
+  if (parent.no_reply && !allowNoReply) {
+    return toolError(`message ${id} is marked no-reply; pass allow_no_reply: true only if the user explicitly wants to reply anyway`);
+  }
+  const result = recipients?.length
+    ? resolveRecipients(recipients, resolverFor(deps, caller))
+    : { to: participantsOf(parent).filter((a) => !sameAddress(a, caller.address)), resolved: [] };
+  if (result.to.length === 0) return toolError(`message ${id} has no other participants to reply to; pass recipients`);
+  return result;
 }
 
-const sentOutput = outputObject({
+export const hintOutput = z.string().optional().describe("for you, not the user: a better way to do this next time");
+
+export const sentOutput = outputObject({
   id: z.string(),
   time: z.string().nullable(),
   from: z.string(),
@@ -72,17 +99,26 @@ const sentOutput = outputObject({
   thread_topic: z.string().nullable().optional().describe(
     "the thread's topic: the topic sent for a new message; for a reply, the thread root's topic, or null when the root is not visible",
   ),
+  hint: hintOutput,
 });
 
-function redactionNote(count: number, kinds: string[]): string {
+/** The result text with a hint for the model appended, when there is one. */
+export function withHint(text: string, hint: string | undefined): string {
+  return hint ? `${text}\n\n${hint}` : text;
+}
+
+export function redactionNote(count: number, kinds: string[]): string {
   return count ? `. ${count} secret(s) were redacted before sending (${kinds.join(", ")}).` : ".";
 }
 
-function resolvedNote(resolved: Array<{ input: string; address: string }>): string {
+export function resolvedNote(resolved: Array<{ input: string; address: string }>): string {
   return resolved.length ? ` Short names resolved: ${resolved.map((r) => `${r.input} → ${addressText(r.address)}`).join(", ")}.` : "";
 }
 
 export const registerSendTools: Register = (server, deps) => {
+  const attachments = z.array(attachmentInput(deps.config)).optional().describe("files");
+  const guidance = attachmentGuidance(deps.config);
+  const routes = fileRoutes(deps.config);
   server.registerTool(
     "send_message",
     {
@@ -91,7 +127,7 @@ export const registerSendTools: Register = (server, deps) => {
         `Send a new message immediately, starting a new thread. ${IMMUTABLE} ` +
         "Recipients may be full @user@domain addresses or resolvable short names. The body is Markdown by default. " +
         "Secrets are redacted. If the host rejects the message its reason is returned verbatim. " +
-        "To continue an existing conversation use reply instead.",
+        `To continue an existing conversation use reply instead. ${guidance}`,
       inputSchema: z.strictObject({
         to: z.array(z.string()).min(1).describe("recipient addresses (@user@domain) or short names"),
         topic: z.string().max(256).describe("thread topic (subject) — immutable once sent"),
@@ -99,7 +135,7 @@ export const registerSendTools: Register = (server, deps) => {
         type: z.string().default("text/markdown; charset=utf-8").describe("body media type"),
         important: z.boolean().default(false).describe(IMPORTANT),
         no_reply: z.boolean().default(false).describe(NO_REPLY),
-        attachments: z.array(attachmentInput).optional().describe("files"),
+        attachments,
       }),
       outputSchema: sentOutput,
       annotations: SENDS,
@@ -107,17 +143,9 @@ export const registerSendTools: Register = (server, deps) => {
     async ({ to, topic, body, type, important, no_reply, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const { to: recipients, resolved } = resolveRecipients(to, resolverFor(deps, caller));
-        const outbound = decodeAttachments(attachments);
-        const sent = await caller.client.send({
-          to: recipients,
-          topic,
-          body,
-          type,
-          important,
-          noReply: no_reply,
-          attachments: outbound,
-          signal,
-        });
+        const outbound = await prepareAttachments(attachments, deps.config);
+        const hint = base64Hint(attachments, routes);
+        const sent = await sendWithAttachments(caller.client, { to: recipients, topic, body, type, important, noReply: no_reply }, outbound, signal);
         const structured = {
           id: sent.id,
           time: isoTime(sent.time),
@@ -131,11 +159,12 @@ export const registerSendTools: Register = (server, deps) => {
           ...(resolved.length ? { resolved } : {}),
           warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
           thread_topic: sent.topic,
+          ...(hint ? { hint } : {}),
         };
         const text = `Sent message ${sent.id} "${sent.topic}" to ${addressList(recipients)} at ${structured.time ?? "?"}` +
           (structured.attachments.length ? ` with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
           redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
-        return ok(text, structured);
+        return ok(withHint(text, hint), structured);
       }),
   );
 
@@ -147,7 +176,7 @@ export const registerSendTools: Register = (server, deps) => {
         `Send an immediate reply to a message (linking it into that thread). ${IMMUTABLE} ` +
         "By default the reply goes to everyone on the parent message — its sender, recipients and anyone added later — " +
         "except you; pass recipients to narrow or widen that. Fails if the parent is terminal (no replies possible); " +
-        "a parent marked no-reply is refused unless allow_no_reply is true. Secrets are redacted.",
+        `a parent marked no-reply is refused unless allow_no_reply is true. Secrets are redacted. ${guidance}`,
       inputSchema: z.strictObject({
         id: idSchema.describe("message to reply to"),
         body: z.string().describe("reply body; Markdown unless type says otherwise"),
@@ -156,7 +185,7 @@ export const registerSendTools: Register = (server, deps) => {
         important: z.boolean().default(false).describe(IMPORTANT),
         no_reply: z.boolean().default(false).describe(NO_REPLY),
         allow_no_reply: z.boolean().default(false).describe("reply even though the parent asked for no replies"),
-        attachments: z.array(attachmentInput).optional().describe("files"),
+        attachments,
       }),
       outputSchema: sentOutput,
       annotations: SENDS,
@@ -164,25 +193,12 @@ export const registerSendTools: Register = (server, deps) => {
     async ({ id, body, recipients, type, important, no_reply, allow_no_reply, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const parent = await caller.client.getMessage(id, signal);
-        if (parent.terminal) return toolError(`message ${id} is terminal and cannot be replied to`);
-        if (parent.no_reply && !allow_no_reply) {
-          return toolError(`message ${id} is marked no-reply; pass allow_no_reply: true only if the user explicitly wants to reply anyway`);
-        }
-        const { to, resolved } = recipients?.length
-          ? resolveRecipients(recipients, resolverFor(deps, caller))
-          : { to: participantsOf(parent).filter((a) => !sameAddress(a, caller.address)), resolved: [] };
-        if (to.length === 0) return toolError(`message ${id} has no other participants to reply to; pass recipients`);
-        const outbound = decodeAttachments(attachments);
-        const sent = await caller.client.send({
-          to,
-          pid: parent.id,
-          body,
-          type,
-          important,
-          noReply: no_reply,
-          attachments: outbound,
-          signal,
-        });
+        const target = replyRecipients(deps, caller, parent, recipients, allow_no_reply);
+        if ("content" in target) return target;
+        const { to, resolved } = target;
+        const outbound = await prepareAttachments(attachments, deps.config);
+        const hint = base64Hint(attachments, routes);
+        const sent = await sendWithAttachments(caller.client, { to, pid: parent.id, body, type, important, noReply: no_reply }, outbound, signal);
         const structured = {
           id: sent.id,
           time: isoTime(sent.time),
@@ -197,11 +213,12 @@ export const registerSendTools: Register = (server, deps) => {
           warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
           // The reply is already sent: a failed topic lookup only leaves the topic unknown.
           thread_topic: await rootTopic(caller.client, parent, signal).catch(() => null),
+          ...(hint ? { hint } : {}),
         };
         const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
         const text = `Sent reply ${sent.id} to message ${parent.id}${topic} for ${addressList(to)} at ${structured.time ?? "?"}` +
           redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
-        return ok(text, structured);
+        return ok(withHint(text, hint), structured);
       }),
   );
 

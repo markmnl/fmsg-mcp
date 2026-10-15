@@ -31,7 +31,7 @@ Save this as `Caddyfile`:
 
 ```caddyfile
 mcp.example.com {
-    @fmsg path /mcp /mcp/attachments/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
+    @fmsg path /mcp /mcp/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
     handle @fmsg {
         reverse_proxy 127.0.0.1:8765 {
             transport http {
@@ -85,7 +85,7 @@ Set `FMSG_MCP_PUBLIC_URL` to the exact external MCP endpoint when using API keys
 to `FMSG_MCP_OAUTH_RESOURCE_URL`; if both are set, they must match. These URLs require HTTPS outside
 loopback and cannot contain credentials, queries or fragments. Request Host and forwarded headers
 never select the download URL. If the proxy exposes MCP under a different public path, map that
-path and its `/attachments/*` suffix to `/mcp` and `/mcp/attachments/*` respectively.
+path and everything under it to `/mcp` and `/mcp/*` respectively.
 
 Downloads use the original MIME type, `Content-Disposition: attachment`, Unicode filename encoding,
 `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. The body streams with backpressure;
@@ -94,7 +94,39 @@ truncated file. No temporary server files, signed URLs or tokens in query string
 Range/resume requests are not implemented: GET returns the full file. Treat a failed transfer as
 incomplete and discard its partial local output before retrying.
 
-Host and Origin validation applies to downloads too. Allowed browser clients can preflight GET
+## Attachment uploads
+
+`create_draft` returns an upload URL template such as
+`https://mcp.example.com/mcp/drafts/123/attachments/{filename}`. A host that can send the MCP
+connection's Authorization header PUTs the raw file bytes there, then calls `send_draft`:
+
+```sh
+curl -X PUT -H "Authorization: Bearer $TOKEN" \
+  -H "x-content-sha256: $(sha256sum report.pdf | cut -c1-64)" \
+  --data-binary @report.pdf https://mcp.example.com/mcp/drafts/123/attachments/report.pdf
+```
+
+The server streams the body straight into the fmsg draft (`POST /fmsg/:id/attach`) without
+storing it, so the draft and its attachments are visible in the user's other fmsg clients and the
+fmsg host's own size limits apply; its refusal comes back with its status and text. OAuth requires
+`fmsg:write`. The response is `201` with `filename`, `size`, `sha256` and `type`. The fmsg host may
+rename a duplicate filename; the response gives the stored name.
+
+- `x-content-sha256` (optional, hex): a mismatch answers `422`, and the attachment is removed again.
+- `Content-Encoding: gzip` or `deflate` (optional): the server decodes the body while streaming, so
+  fmsg stores the original file; `size` and `sha256` describe the decoded bytes. Other encodings
+  answer `415`; corrupt or truncated compressed data answers `400` and nothing is kept.
+- The file's type comes from `Content-Type`, except that `application/x-www-form-urlencoded`
+  (curl's default for `--data-binary`) and `application/octet-stream` are replaced by the type the
+  filename implies.
+
+Uploads have no total time limit: each chunk resets a 60-second idle timeout, as for downloads.
+Other requests must arrive in full within 60 seconds. Upload connections close after the response.
+The server does the proxying to the fmsg host itself: a TLS proxy that forwards `/mcp/*`, like the
+Caddy example above, needs no upload-specific settings. Proxies that cap request bodies by default
+(nginx's `client_max_body_size` is 1 MB) should not cap them below the fmsg host's attachment limit.
+
+Host and Origin validation applies to downloads and uploads too. Allowed browser clients can preflight GET
 with Authorization and read Content-Disposition. Hosts must attach the connection credential
 themselves; never ask the model to locate or copy tokens. Clients that cannot fetch authenticated
 links can still use `download_attachment` inline. Compatibility of authenticated links with each
