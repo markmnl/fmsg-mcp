@@ -21,15 +21,10 @@ export type InstructionsContext = {
 /** How to send files, naming only the routes this server offers. */
 function filesParagraph(files: FileRoutes | undefined): string {
   const large = [
-    ...(files?.uploadUrl ? [
-      "call create_draft, PUT each file to its upload URL with your host's authenticated HTTP tools, then call send_draft. " +
-        "If your host cannot send this connection's credentials with its own requests, use data_base64; never look for or copy credentials",
-    ] : []),
-    ...(files?.uploadFolder ? ["give the file's path in the upload folder instead of its data"] : []),
+    ...(files?.uploadUrl ? ["create_draft, PUT each file to its upload URL, then send_draft"] : []),
+    ...(files?.uploadFolder ? ["give path, a file in the upload folder"] : []),
   ];
-  return "To send files, attach text as data_text and small binary files as data_base64, with sha256 when you can compute it. " +
-    (large.length ? `For large files, ${large.join(". Or ")}. ` : "") +
-    "Send files as they are; fmsg compresses them in transit.";
+  return "Files: data_text for text, data_base64 for small files." + (large.length ? ` Large files: ${large.join("; or ")}.` : "");
 }
 
 export function buildInstructions(ctx: InstructionsContext = {}): string {

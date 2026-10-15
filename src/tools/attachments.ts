@@ -49,7 +49,9 @@ export function attachmentInput(config: Config) {
   const names = sources(config);
   return z.strictObject({
     filename: z.string().regex(FILENAME, "letters, digits, dot, underscore, hyphen only").describe("file name"),
-    data_base64: z.string().optional().describe("base64 file contents; suits small files. The host sets the size limit"),
+    data_base64: z.string().optional().describe(`base64 file contents, for small files${
+      config.uploadDir ? "; give large files as path" : downloadBaseUrl(config) ? "; send large files with create_draft's upload URL" : ""
+    }. The host sets the size limit`),
     data_text: z.string().optional().describe("text file contents, sent as UTF-8 bytes; use instead of data_base64 for text"),
     ...(config.uploadDir ? {
       path: z.string().min(1).optional().describe("file in the configured upload folder, relative to it; the server reads it so its bytes skip model context"),

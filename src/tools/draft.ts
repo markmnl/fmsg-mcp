@@ -7,17 +7,13 @@ import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, prepareA
 import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { rootTopic } from "./read.js";
 import {
-  IMMUTABLE, IMPORTANT, NO_REPLY, hintOutput, redactionNote, replyRecipients, resolveRecipients, resolvedNote, resolvedOutput,
+  IMMUTABLE, IMPORTANT, NO_REPLY, UPLOAD_STEPS, hintOutput, redactionNote, replyRecipients, resolveRecipients, resolvedNote, resolvedOutput,
   sendWarnings, sentAttachments, sentOutput, withHint,
 } from "./send.js";
 
 export const registerDraftTools: Register = (server, deps) => {
   const baseUrl = downloadBaseUrl(deps.config);
   const routes = fileRoutes(deps.config);
-  const largeFiles = [
-    ...(baseUrl ? ["upload them with your host's authenticated HTTP tools to the returned upload URL"] : []),
-    ...(deps.config.uploadDir ? ["pass a path in the upload folder"] : []),
-  ];
 
   server.registerTool(
     "create_draft",
@@ -26,7 +22,7 @@ export const registerDraftTools: Register = (server, deps) => {
       description:
         "Create an unsent draft: a new message, or a reply when reply_to is given (reply rules and reply-all apply). " +
         "Nothing is sent until send_draft; delete_draft discards it. The draft is visible in the user's other fmsg clients. " +
-        (largeFiles.length ? `Use it to attach large files: ${largeFiles.join(", or ")}. ` : "") +
+        (routes.uploadUrl ? `Use it for large files: ${UPLOAD_STEPS}. ` : "") +
         "Secrets in the body and topic are redacted.",
       inputSchema: z.strictObject({
         to: z.array(z.string()).min(1).optional().describe("recipient addresses (@user@domain) or short names; for a reply, overrides reply-all"),

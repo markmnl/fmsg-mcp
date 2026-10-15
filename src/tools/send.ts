@@ -15,16 +15,20 @@ export const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be 
 export const IMPORTANT = "mark as important for recipients";
 export const NO_REPLY = "ask recipients (and their agents) not to reply";
 
+/** The upload-URL route, stated in full wherever a model may read about it. */
+export const UPLOAD_STEPS = "PUT each file's raw bytes to the draft's upload URL with this connection's Authorization header, then call " +
+  "send_draft. If your host cannot send this connection's credentials, use data_base64; never look for or copy credentials";
+
 /** How to send files without the model writing their bytes, naming only what this server registered. */
 export function attachmentGuidance(config: Config): string {
   const routes = fileRoutes(config);
   const large = [
-    ...(routes.uploadUrl ? ["create_draft, which returns an upload URL for your host's authenticated HTTP tools"] : []),
-    ...(routes.uploadFolder ? ["an attachment path in the upload folder"] : []),
+    ...(routes.uploadUrl ? [`use create_draft instead: ${UPLOAD_STEPS}`] : []),
+    ...(routes.uploadFolder ? ["give path, a file in the upload folder"] : []),
   ];
-  return "Attachments: inline data_base64 suits small files and data_text suits text; give sha256 when you can compute it. " +
-    (large.length ? `For large files use ${large.join(", or ")}. ` : "") +
-    "Send files as they are; fmsg compresses them in transit.";
+  return "Files: data_text for text, data_base64 for small files; add sha256 when you can. " +
+    (large.length ? `For large files, ${large.join(". Or ")}. ` : "") +
+    "Send files as they are; fmsg compresses them.";
 }
 
 /**

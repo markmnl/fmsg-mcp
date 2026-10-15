@@ -117,16 +117,19 @@ describe("HTTP attachment uploads", () => {
   it("points large files at create_draft and offers no local path over HTTP", async () => {
     const { tools } = await client.listTools();
     const send = tools.find((t) => t.name === "send_message")!;
-    expect(send.description).toContain("For large files use create_draft, which returns an upload URL");
-    expect(send.description).toContain("Send files as they are; fmsg compresses them in transit.");
+    // Hosts may skip server instructions, so each tool carries the whole route on its own.
+    const steps = "PUT each file's raw bytes to the draft's upload URL with this connection's Authorization header, then call send_draft. " +
+      "If your host cannot send this connection's credentials, use data_base64; never look for or copy credentials.";
+    for (const name of ["send_message", "reply", "create_draft"]) expect(tools.find((t) => t.name === name)!.description, name).toContain(steps);
+    expect(send.description).toContain("For large files, use create_draft instead: PUT");
+    expect(send.description).toContain("Send files as they are; fmsg compresses them.");
+    expect(JSON.stringify(send.inputSchema)).toContain("send large files with create_draft's upload URL");
     expect(JSON.stringify(send.inputSchema)).not.toContain("upload folder");
-    expect(tools.find((t) => t.name === "create_draft")!.description).toContain("upload them with your host's authenticated HTTP tools");
   });
 
   it("points large base64 at the upload URL in instructions, results and the send_file prompt", async () => {
     const instructions = client.getInstructions() ?? "";
-    expect(instructions).toContain("For large files, call create_draft, PUT each file to its upload URL with your host's authenticated HTTP tools, then call send_draft.");
-    expect(instructions).toContain("never look for or copy credentials");
+    expect(instructions).toContain("Files: data_text for text, data_base64 for small files. Large files: create_draft, PUT each file to its upload URL, then send_draft.");
     expect(instructions).not.toContain("upload folder");
     const big = Buffer.alloc(49_152, 1).toString("base64");
     const created = structured<{ hint?: string }>(await call(client, "create_draft", { to: [BOB], topic: "t", body: "b", attachments: [{ filename: "big.bin", data_base64: big }] }));

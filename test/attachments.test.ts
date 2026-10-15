@@ -191,7 +191,7 @@ describe("upload folder (stdio)", () => {
   });
 
   it("points large base64 at the upload folder in instructions, results and the send_file prompt", async () => {
-    expect(h.client.getInstructions()).toContain("For large files, give the file's path in the upload folder instead of its data.");
+    expect(h.client.getInstructions()).toContain("Files: data_text for text, data_base64 for small files. Large files: give path, a file in the upload folder.");
     expect(h.client.getInstructions()).not.toContain("upload URL");
     const big = Buffer.alloc(49_152, 1).toString("base64");
     const sent = await call(h.client, "send_message", { to: [BOB], topic: "t", body: "b",
@@ -212,7 +212,9 @@ describe("upload folder (stdio)", () => {
     const { tools } = await h.client.listTools();
     const send = tools.find((t) => t.name === "send_message")!;
     expect(JSON.stringify(send.inputSchema)).toContain("upload folder");
-    expect(send.description).toContain("an attachment path in the upload folder");
+    expect(send.description).toContain("For large files, give path, a file in the upload folder.");
+    expect(JSON.stringify(send.inputSchema)).toContain("give large files as path");
     expect(send.description).not.toContain("upload URL");
+    expect(tools.find((t) => t.name === "create_draft")!.description).not.toContain("large files");
   });
 });
