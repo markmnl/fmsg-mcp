@@ -12,9 +12,12 @@ import type { Config } from "./config.js";
 import { createFmsgMcpServer } from "./server.js";
 import { OAuthCallerProvider } from "./oauth/provider.js";
 import { invalidToken, insufficientScope, OAuthRequestError, oauthErrorResponse, oauthRequestState, type OAuthRequestState } from "./oauth/errors.js";
-import { MESSAGING_SCOPES, READ_SCOPE, requestScopes } from "./oauth/scopes.js";
+import { MESSAGING_SCOPES, READ_SCOPE, WRITE_SCOPE, requestScopes } from "./oauth/scopes.js";
 import { DOWNLOAD_PATH, downloadBaseUrl, downloadHeaders, parseDownloadPath } from "./download.js";
+import { CHECKSUM_HEADER, UPLOAD_PATH, UploadBodyError, decodedUploadBody, parseUploadPath, uploadEncoding } from "./upload.js";
+import { AttachmentChecksumError } from "./client/client.js";
 import { FmsgHttpError } from "./client/errors.js";
+import { attachmentType } from "./render.js";
 import { describeError } from "./errors.js";
 import type { Caller, CallerProvider } from "./context.js";
 import { VERSION } from "./version.js";
@@ -26,7 +29,10 @@ export const MCP_PATH = "/mcp";
 export const SHUTDOWN_GRACE_MS = 5000;
 
 const CORS_METHODS = ["POST", "GET", "DELETE"];
-const CORS_HEADERS = ["authorization", "content-type", "accept", "mcp-protocol-version", "mcp-method", "mcp-name", "mcp-session-id", "last-event-id"];
+const CORS_HEADERS = ["authorization", "content-type", "accept", "mcp-protocol-version", "mcp-method", "mcp-name", "mcp-session-id", "last-event-id",
+  "content-encoding", CHECKSUM_HEADER];
+/** How long a request other than an attachment upload may take to arrive in full. Uploads use an idle budget instead. */
+export const REQUEST_BODY_TIMEOUT_MS = 60_000;
 // Combined mode routes only fmsg API keys to API-key authentication; everything else is OAuth.
 const API_KEY_BEARER = /^Bearer fmsgk_/iu;
 
@@ -148,8 +154,13 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     const abort = () => controller.abort();
     req.once("aborted", abort);
     res.once("close", abort);
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const isUpload = url.pathname.startsWith(`${UPLOAD_PATH}/`);
+    // A progressing upload may take longer than any fixed budget; the upload stream has an idle timeout instead.
+    // Closing the connection afterwards stops Node from reading the rest of a refused upload's body.
+    const bodyTimer = isUpload ? undefined : setTimeout(() => { if (!req.complete) req.destroy(); }, REQUEST_BODY_TIMEOUT_MS).unref();
+    if (isUpload) res.setHeader("connection", "close");
     const done = (async () => {
-      const url = new URL(req.url ?? "/", "http://localhost");
       const isDownload = url.pathname.startsWith(`${DOWNLOAD_PATH}/`);
       if (url.pathname === "/healthz") {
         res.writeHead(200, { "content-type": "application/json" });
@@ -167,7 +178,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
           bearer_methods_supported: ["header"], resource_name: "fmsg messaging",
         }, { headers }));
       }
-      if (url.pathname !== MCP_PATH && !isDownload) {
+      if (url.pathname !== MCP_PATH && !isDownload && !isUpload) {
         res.writeHead(404, { "content-type": "text/plain" });
         res.end("not found; the MCP endpoint is /mcp");
         return;
@@ -196,7 +207,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (req.method === "OPTIONS") {
         const method = request.headers.get("access-control-request-method") ?? "";
         const headers = (request.headers.get("access-control-request-headers") ?? "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
-        const methods = isDownload ? ["GET"] : CORS_METHODS;
+        const methods = isDownload ? ["GET"] : isUpload ? ["PUT"] : CORS_METHODS;
         if (!origin || !methods.includes(method) || headers.some((h) => !CORS_HEADERS.includes(h))) {
           return sendWebResponse(res, new Response("preflight not allowed", { status: 403 }));
         }
@@ -212,15 +223,44 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
         try { download = parseDownloadPath(url.pathname); }
         catch { return sendWebResponse(res, new Response("invalid attachment download path", { status: 400 })); }
       }
-      const serveDownload = async (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo) => {
+      let upload: (ReturnType<typeof parseUploadPath> & { encoding?: string; contentType: string; sha256?: string }) | undefined;
+      if (isUpload) {
+        if (req.method !== "PUT") return sendWebResponse(res, new Response("use PUT to upload attachments", { status: 405, headers: { allow: "PUT, OPTIONS" } }));
+        if (url.search) return sendWebResponse(res, new Response("attachment URLs must not contain query parameters", { status: 400 }));
+        try { upload = { ...parseUploadPath(url.pathname), contentType: "" }; }
+        catch { return sendWebResponse(res, new Response("invalid attachment upload path; use /mcp/drafts/{id}/attachments/{filename}", { status: 400 })); }
+        try { upload.encoding = uploadEncoding(request.headers.get("content-encoding")); }
+        catch (error) { return sendWebResponse(res, new Response((error as Error).message, { status: 415 })); }
+        const sha256 = request.headers.get(CHECKSUM_HEADER)?.trim();
+        if (sha256 !== undefined) {
+          if (!/^[0-9A-Fa-f]{64}$/u.test(sha256)) return sendWebResponse(res, new Response(`${CHECKSUM_HEADER} must be 64 hexadecimal characters`, { status: 400 }));
+          upload.sha256 = sha256.toLowerCase();
+        }
+        // curl and similar tools label raw bodies as form data by default; that says nothing about the file.
+        const declared = request.headers.get("content-type")?.trim();
+        if (declared && !/^[\x20-\x7e]+$/u.test(declared)) return sendWebResponse(res, new Response("Content-Type must be printable ASCII", { status: 400 }));
+        upload.contentType = declared && !/^application\/x-www-form-urlencoded\b/iu.test(declared)
+          ? attachmentType(upload.filename, declared) : attachmentType(upload.filename);
+      }
+      const serveDownload = (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo) => serveTransfer(provider, auth, READ_SCOPE, async (caller) => {
+        const { stream, contentType } = await caller.client.streamAttachment(download!.id, download!.filename, controller.signal);
+        let response: Response;
+        try { response = new Response(stream, { headers: downloadHeaders(download!.filename, contentType) }); }
+        catch (error) { await stream.cancel().catch(() => undefined); throw error; }
+        return sendWebResponse(res, response);
+      });
+      const serveUpload = (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo) => serveTransfer(provider, auth, WRITE_SCOPE, async (caller) => {
+        const body = decodedUploadBody(request.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() }), upload!.encoding);
+        const uploaded = await caller.client.uploadAttachmentStream(upload!.id, {
+          filename: upload!.filename, stream: body, contentType: upload!.contentType, ...(upload!.sha256 ? { expectedSha256: upload!.sha256 } : {}),
+        }, controller.signal);
+        return sendWebResponse(res, Response.json({ id: upload!.id, ...uploaded, type: upload!.contentType }, { status: 201 }));
+      });
+      const serveTransfer = async (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo, scope: string, transfer: (caller: Caller) => Promise<void>) => {
         let caller: Caller | undefined;
         try {
           caller = await provider.forRequest(auth);
-          const { stream, contentType } = await caller.client.streamAttachment(download!.id, download!.filename, controller.signal);
-          let response: Response;
-          try { response = new Response(stream, { headers: downloadHeaders(download!.filename, contentType) }); }
-          catch (error) { await stream.cancel().catch(() => undefined); throw error; }
-          return await sendWebResponse(res, response);
+          return await transfer(caller);
         } catch (error) {
           const rejectedAuth = (error instanceof OAuthRequestError && error.status === 401) ||
             (error instanceof FmsgHttpError && (error.status === 401 || (error.path === "/fmsg/token" && [400, 403].includes(error.status))));
@@ -231,10 +271,11 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
             if (error instanceof OAuthRequestError) return sendWebResponse(res, oauthErrorResponse(error, metadataUrl));
             if (rejectedAuth) return sendWebResponse(res, oauthErrorResponse(invalidToken(), metadataUrl));
             if (error instanceof FmsgHttpError && error.insufficientScope) {
-              return sendWebResponse(res, oauthErrorResponse(new OAuthRequestError(403, "insufficient_scope", error.message, [READ_SCOPE]), metadataUrl));
+              return sendWebResponse(res, oauthErrorResponse(new OAuthRequestError(403, "insufficient_scope", error.message, [scope]), metadataUrl));
             }
           }
-          const status = rejectedAuth ? 401 : error instanceof FmsgHttpError && error.status >= 400 && error.status <= 599 ? error.status : 502;
+          const status = rejectedAuth ? 401 : error instanceof AttachmentChecksumError ? 422 : error instanceof UploadBodyError ? 400
+            : error instanceof FmsgHttpError && error.status >= 400 && error.status <= 599 ? error.status : 502;
           const challenge = `Bearer error="invalid_token"${resource ? `, resource_metadata=${JSON.stringify(metadataUrl)}` : ""}`;
           return sendWebResponse(res, Response.json({ error: describeError(error) }, {
             status, headers: status === 401 ? { "www-authenticate": challenge } : {},
@@ -254,9 +295,10 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
             catch { return sendWebResponse(res, new Response("invalid JSON request", { status: 400 })); }
             if (Array.isArray(parsedBody)) return sendWebResponse(res, new Response("MCP batch requests are not supported", { status: 400 }));
           }
-          const scopes = download ? [READ_SCOPE] : requestScopes(parsedBody);
+          const scopes = download ? [READ_SCOPE] : upload ? [WRITE_SCOPE] : requestScopes(parsedBody);
           if (scopes.some(scope => !authenticated.scopes.includes(scope))) throw insufficientScope(scopes);
           if (download) return await serveDownload(oauthProvider, authenticated);
+          if (upload) return await serveUpload(oauthProvider, authenticated);
           // Discover/list operations only need the incoming JWT. Resolve an
           // exchanged credential before starting any protected tool response.
           if (scopes.length) {
@@ -290,6 +332,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       const auth = await gate(request);
       if (auth instanceof Response) return sendWebResponse(res, auth);
       if (download) return serveDownload(apiKeyProvider, auth);
+      if (upload) return serveUpload(apiKeyProvider, auth);
       return sendWebResponse(res, await apiKeyHandler.fetch(request, { authInfo: auth }));
     })().catch((error) => {
       safeLog(`request failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -298,6 +341,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       res.writeHead(500, { "content-type": "text/plain" });
       res.end("internal error");
     }).finally(() => {
+      clearTimeout(bodyTimer);
       release?.();
       active.delete(controller);
       req.off("aborted", abort);
@@ -305,8 +349,8 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     });
     active.set(controller, { res, done });
   });
-  // This bounds receiving the request body, not the duration of a wait response.
-  server.requestTimeout = 60_000;
+  // Request bodies are bounded per request above (REQUEST_BODY_TIMEOUT_MS, or the upload idle budget).
+  server.requestTimeout = 0;
   server.headersTimeout = 60_000;
   server.keepAliveTimeout = 65_000;
 

@@ -134,6 +134,31 @@ export type SendInput = {
   signal?: AbortSignal;
 };
 
+/** A new message's fields without attachments; see FmsgClient.createDraft. */
+export type DraftInput = Omit<SendInput, "attachments">;
+
+export type DraftResult = {
+  id: string;
+  /** Selected secret patterns replaced in the draft's body and topic. */
+  redactions: number;
+  redacted: string[];
+  /** Topic actually stored, after redaction; empty for replies. */
+  topic: string;
+};
+
+export type StreamAttachment = {
+  filename: string;
+  stream: ReadableStream<Uint8Array>;
+  contentType?: string;
+  /** Lowercase hex sha256 the bytes must have; a mismatch removes the attachment again. */
+  expectedSha256?: string;
+};
+
+export type UploadedAttachment = Attachment & {
+  /** Lowercase hex sha256 of the bytes uploaded. */
+  sha256: string;
+};
+
 export type SendResult = {
   id: string;
   time: number | null;

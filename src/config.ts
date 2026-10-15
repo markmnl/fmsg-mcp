@@ -36,6 +36,8 @@ export type Config = {
   directory?: Record<string, string>;
   /** Trusted local destination; enables save_attachment over stdio only. */
   downloadDir?: string;
+  /** Trusted local source folder; enables attachment `path` arguments over stdio only. */
+  uploadDir?: string;
   /** Hard cap on a single wait_for_message call. */
   waitMaxSeconds: number;
   http: HttpConfig;
@@ -158,6 +160,7 @@ export function loadConfig(
     ...(defaultDomain ? { defaultDomain } : {}),
     ...(directoryPath ? { directory: loadDirectory(directoryPath) } : {}),
     ...(transport === "stdio" && env.FMSG_MCP_DOWNLOAD_DIR?.trim() ? { downloadDir: env.FMSG_MCP_DOWNLOAD_DIR.trim() } : {}),
+    ...(transport === "stdio" && env.FMSG_MCP_UPLOAD_DIR?.trim() ? { uploadDir: env.FMSG_MCP_UPLOAD_DIR.trim() } : {}),
     waitMaxSeconds: intEnv(env, "FMSG_MCP_WAIT_MAX_SECONDS", DEFAULT_WAIT_MAX_SECONDS),
     http: {
       host,

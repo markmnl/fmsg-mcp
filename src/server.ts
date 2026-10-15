@@ -9,6 +9,7 @@ import { registerIdentityTools } from "./tools/identity.js";
 import { registerListTools } from "./tools/list.js";
 import { registerReadTools } from "./tools/read.js";
 import { registerSendTools } from "./tools/send.js";
+import { registerDraftTools } from "./tools/draft.js";
 import { registerWaitTools } from "./tools/wait.js";
 import { registerSaveTool } from "./tools/save.js";
 import { registerDownloadTool } from "./tools/download.js";
@@ -40,6 +41,7 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   registerSaveTool(server, deps);
   registerDownloadTool(server, deps);
   registerSendTools(server, deps);
+  registerDraftTools(server, deps);
   registerWaitTools(server, deps);
   registerResources(server, deps);
   registerPrompts(server);

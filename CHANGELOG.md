@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Large attachments no longer have to pass through the model as base64 ([#17](https://github.com/markmnl/fmsg-mcp/issues/17)).
+  New `create_draft`, `send_draft` and `delete_draft` tools create a real fmsg draft that other fmsg
+  clients can see. Over HTTP with a public MCP URL, `create_draft` returns an upload URL: the host
+  PUTs raw file bytes to `/mcp/drafts/{id}/attachments/{filename}` with the connection's
+  Authorization header (OAuth needs `fmsg:write`), and the server streams them into the draft
+  without storing them. Uploads accept `Content-Encoding: gzip` or `deflate` and an optional
+  `x-content-sha256` check, and have an idle timeout rather than a total one. Proxies must forward
+  `/mcp/drafts/*`.
+- Attachments take exactly one of `data_base64`, `data_text` (UTF-8 text without base64) or, over
+  stdio with the new `FMSG_MCP_UPLOAD_DIR`, `path` (a file in that folder, streamed by the server).
+  An optional `sha256` is checked before anything is sent.
+- `data_base64` is decoded strictly: characters outside the base64 alphabet, a bad length or
+  padding, or a stray ending are refused with the attachment's name. They used to be skipped
+  silently, sending a corrupted file.
+- `send_message` and `reply` descriptions say when inline base64 suits and where large files go.
+- `FmsgClient` adds `createDraft()`, `uploadAttachmentStream()`, `deleteAttachment()` and
+  `sendDraft()`, and exports `AttachmentChecksumError`; `send()` is their composition.
 - `get_message` text gives the decoded body size next to the stored size for a compressed body
   ("1002 bytes; 587 stored, sent compressed"), so the stored size is never mistaken for the body's.
 - `list_messages` text marks messages you sent to yourself as unread when they are.

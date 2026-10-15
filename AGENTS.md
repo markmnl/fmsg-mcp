@@ -32,7 +32,9 @@ src/auth.ts         HTTP bearer verifier: key hash → cached FmsgClient + addre
 src/oauth/          HTTP OAuth discovery, validation, scopes and token exchange
 src/http.ts         node:http server, /mcp + /healthz, Host/Origin allowlist, bearer gate
 src/download.ts     binary download URLs, path validation and attachment headers
-src/tools/*.ts      one file per tool group; src/tools/common.ts has shared schemas/helpers
+src/upload.ts       draft upload URLs and paths, Content-Encoding decoding
+src/tools/*.ts      one file per tool group; src/tools/common.ts has shared schemas/helpers,
+                    src/tools/attachments.ts the outbound attachment sources (base64, text, path)
 src/wait.ts         wait_for_message engine (WebSocket first, inbox catch-up, settle batching)
 src/thread.ts       thread assembly via /thread/messages with a pid-walk fallback
 src/render.ts       Markdown rendering for content[0].text; truncation; injection preamble
@@ -67,7 +69,8 @@ classification in `src/oauth/scopes.ts` synchronized with tools; reply needs rea
 See `docs/oauth.md` for the vendor-neutral claims contract and deployment requirements.
 
 HTTP attachment downloads at `/mcp/attachments/{id}/{filename}` reuse the bearer gate and upstream
-caller; OAuth requires `fmsg:read`. Link generation uses only the configured public MCP URL (the
+caller; OAuth requires `fmsg:read`. Uploads (`PUT /mcp/drafts/{id}/attachments/{filename}`) do the
+same with `fmsg:write` and stream into the upstream draft; never stage file bytes on this server. Link generation uses only the configured public MCP URL (the
 OAuth resource URL by default), never Host or forwarded headers. Keep credentials out of links.
 
 ## Adding a tool

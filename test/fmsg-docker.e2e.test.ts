@@ -2,7 +2,9 @@
  * End-to-end against two real fmsg stacks (see .github/scripts/run-fmsg-docker-e2e.sh).
  * alice lives on one host, bob and carol on another, so every send crosses hosts.
  */
+import { createHash, randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { FmsgClient } from "../src/client/client.js";
@@ -126,6 +128,20 @@ describe.skipIf(!enabled)("fmsg-docker end to end", () => {
       expect(download.status).toBe(200);
       expect(download.headers.get("content-disposition")).toContain("attachment;");
       expect(Buffer.from(await download.arrayBuffer())).toEqual(bytes);
+
+      // Large-file path: a real draft, a compressed PUT checked by sha256, then send_draft.
+      const large = randomBytes(2 * 1024 * 1024);
+      const draft = structured<{ draft_id: string; upload: { url_template: string } }>(await call(client, "create_draft", {
+        to: [BOB], topic: `upload ${token}`, body: "uploaded attachment" }));
+      const uploaded = await fetch(draft.upload.url_template.replace("{filename}", "large.bin"), { method: "PUT", body: gzipSync(large), headers: {
+        authorization: `Bearer ${env("FMSG_E2E_ALICE_API_KEY")}`, "content-encoding": "gzip",
+        "x-content-sha256": createHash("sha256").update(large).digest("hex") } });
+      expect(uploaded.status).toBe(201);
+      const sentDraft = structured<{ id: string; attachments: Array<{ filename: string; size: number }> }>(await call(client, "send_draft", { id: draft.draft_id }));
+      expect(sentDraft.attachments).toMatchObject([{ filename: "large.bin", size: large.byteLength }]);
+      const largeLink = structured<{ download_url: string }>(await call(client, "get_attachment_download_url", { id: sentDraft.id, filename: "large.bin" }));
+      const largeDownload = await fetch(largeLink.download_url, { headers: { authorization: `Bearer ${env("FMSG_E2E_ALICE_API_KEY")}` } });
+      expect(Buffer.from(await largeDownload.arrayBuffer()).equals(large)).toBe(true);
     } finally {
       await client.close();
       await http.close();
