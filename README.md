@@ -213,7 +213,7 @@ For remote file downloads, call `get_attachment_download_url` with the message I
 It returns metadata and an HTTPS `resource_link`; your AI host downloads the original bytes using
 the existing MCP connection's Authorization header. API-key operators enable the tool with
 `FMSG_MCP_PUBLIC_URL=https://mcp.example.com/mcp`; OAuth deployments reuse their configured resource
-URL automatically. The [reverse proxy must forward the attachment route](docs/http-deployment.md#binary-attachment-downloads).
+URL automatically. See [Binary attachment downloads](docs/http-deployment.md#binary-attachment-downloads).
 Links contain no credentials and grant no access by themselves. The host must support authenticated
 HTTP downloads; an ordinary browser click without the header returns 401. Use inline downloads when
 that host capability is unavailable. Downloads stream without the inline size budget, using the

@@ -31,7 +31,7 @@ Save this as `Caddyfile`:
 
 ```caddyfile
 mcp.example.com {
-    @fmsg path /mcp /mcp/attachments/* /mcp/drafts/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
+    @fmsg path /mcp /mcp/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
     handle @fmsg {
         reverse_proxy 127.0.0.1:8765 {
             transport http {
@@ -85,7 +85,7 @@ Set `FMSG_MCP_PUBLIC_URL` to the exact external MCP endpoint when using API keys
 to `FMSG_MCP_OAUTH_RESOURCE_URL`; if both are set, they must match. These URLs require HTTPS outside
 loopback and cannot contain credentials, queries or fragments. Request Host and forwarded headers
 never select the download URL. If the proxy exposes MCP under a different public path, map that
-path and its `/attachments/*` suffix to `/mcp` and `/mcp/attachments/*` respectively.
+path and everything under it to `/mcp` and `/mcp/*` respectively.
 
 Downloads use the original MIME type, `Content-Disposition: attachment`, Unicode filename encoding,
 `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. The body streams with backpressure;
@@ -121,9 +121,10 @@ rename a duplicate filename; the response gives the stored name.
   filename implies.
 
 Uploads have no total time limit: each chunk resets a 60-second idle timeout, as for downloads.
-Other requests must arrive in full within 60 seconds. Forward `PUT /mcp/drafts/*` (the Caddy
-example above does) and do not buffer it or cap its body below the fmsg host's attachment limit.
-Upload connections close after the response.
+Other requests must arrive in full within 60 seconds. Upload connections close after the response.
+The server does the proxying to the fmsg host itself: a TLS proxy that forwards `/mcp/*`, like the
+Caddy example above, needs no upload-specific settings. Proxies that cap request bodies by default
+(nginx's `client_max_body_size` is 1 MB) should not cap them below the fmsg host's attachment limit.
 
 Host and Origin validation applies to downloads and uploads too. Allowed browser clients can preflight GET
 with Authorization and read Content-Disposition. Hosts must attach the connection credential

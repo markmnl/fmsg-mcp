@@ -8,8 +8,8 @@
   PUTs raw file bytes to `/mcp/drafts/{id}/attachments/{filename}` with the connection's
   Authorization header (OAuth needs `fmsg:write`), and the server streams them into the draft
   without storing them. Uploads accept `Content-Encoding: gzip` or `deflate` and an optional
-  `x-content-sha256` check, and have an idle timeout rather than a total one. Proxies must forward
-  `/mcp/drafts/*`.
+  `x-content-sha256` check, and have an idle timeout rather than a total one. The example Caddyfile now forwards everything
+  under `/mcp`, so new routes need no proxy changes.
 - Attachments take exactly one of `data_base64`, `data_text` (UTF-8 text without base64) or, over
   stdio with the new `FMSG_MCP_UPLOAD_DIR`, `path` (a file in that folder, streamed by the server).
   An optional `sha256` is checked before anything is sent.
