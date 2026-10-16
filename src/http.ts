@@ -11,12 +11,13 @@ import { ApiKeyCallerProvider, FMSG_SCOPE } from "./auth.js";
 import type { Config } from "./config.js";
 import { createFmsgMcpServer } from "./server.js";
 import { OAuthCallerProvider } from "./oauth/provider.js";
-import { invalidToken, insufficientScope, OAuthRequestError, oauthErrorResponse, oauthRequestState, type OAuthRequestState } from "./oauth/errors.js";
+import { invalidToken, insufficientScope, missingToken, OAuthRequestError, oauthErrorResponse, oauthRequestState, type OAuthRequestState } from "./oauth/errors.js";
 import { MESSAGING_SCOPES, READ_SCOPE, WRITE_SCOPE, requestScopes } from "./oauth/scopes.js";
 import { DOWNLOAD_PATH, downloadBaseUrl, downloadHeaders, parseDownloadPath } from "./download.js";
-import { CHECKSUM_HEADER, UPLOAD_PATH, UploadBodyError, decodedUploadBody, parseUploadPath, uploadEncoding } from "./upload.js";
-import { AttachmentChecksumError } from "./client/client.js";
+import { CHECKSUM_HEADER, UPLOAD_DRAIN_IDLE_MS, UPLOAD_PATH, UploadBodyError, decodedUploadBody, drainableBody, parseUploadPath, uploadEncoding } from "./upload.js";
+import { AttachmentChecksumError, UploadInterruptedError } from "./client/client.js";
 import { FmsgHttpError } from "./client/errors.js";
+import { sameAddress } from "./address.js";
 import { attachmentType } from "./render.js";
 import { describeError } from "./errors.js";
 import type { Caller, CallerProvider } from "./context.js";
@@ -116,6 +117,17 @@ export type HttpServerHandle = {
   providers: { apiKey?: ApiKeyCallerProvider; oauth?: OAuthCallerProvider };
 };
 
+/**
+ * After the host cut off an upload, the reason it gave is lost; say why when the draft shows it. A failed lookup
+ * throws the host's own error, such as a draft the caller cannot see.
+ */
+async function draftRefusal(caller: Caller, id: string, signal: AbortSignal): Promise<string | undefined> {
+  const draft = await caller.client.getMessage(id, signal);
+  if (draft.time !== null && draft.time !== undefined) return `message ${id} was already sent; attachments can be added only to drafts`;
+  if (!sameAddress(draft.from, caller.address)) return `message ${id} is not your draft; only its sender can add attachments`;
+  return undefined;
+}
+
 export function createHttpServer(config: Config, log: (line: string) => void = (l) => console.error(l)): HttpServerHandle {
   const allowedHosts = config.http.allowedHosts.length
     ? config.http.allowedHosts
@@ -157,7 +169,8 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     const url = new URL(req.url ?? "/", "http://localhost");
     const isUpload = url.pathname.startsWith(`${UPLOAD_PATH}/`);
     // A progressing upload may take longer than any fixed budget; the upload stream has an idle timeout instead.
-    // Closing the connection afterwards stops Node from reading the rest of a refused upload's body.
+    // Closing the connection afterwards stops Node reading the rest of an upload refused before authentication;
+    // an authenticated caller's failed upload is drained first so its answer arrives (see serveUpload).
     const bodyTimer = isUpload ? undefined : setTimeout(() => { if (!req.complete) req.destroy(); }, REQUEST_BODY_TIMEOUT_MS).unref();
     if (isUpload) res.setHeader("connection", "close");
     const done = (async () => {
@@ -225,20 +238,23 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       }
       let upload: (ReturnType<typeof parseUploadPath> & { encoding?: string; contentType: string; sha256?: string }) | undefined;
       if (isUpload) {
-        if (req.method !== "PUT") return sendWebResponse(res, new Response("use PUT to upload attachments", { status: 405, headers: { allow: "PUT, OPTIONS" } }));
-        if (url.search) return sendWebResponse(res, new Response("attachment URLs must not contain query parameters", { status: 400 }));
+        // Refusals are JSON, like the errors from the upload itself.
+        const uploadRefusal = (error: string, status: number, headers: Record<string, string> = {}) =>
+          sendWebResponse(res, Response.json({ error }, { status, headers }));
+        if (req.method !== "PUT") return uploadRefusal("use PUT to upload attachments", 405, { allow: "PUT, OPTIONS" });
+        if (url.search) return uploadRefusal("attachment URLs must not contain query parameters", 400);
         try { upload = { ...parseUploadPath(url.pathname), contentType: "" }; }
-        catch { return sendWebResponse(res, new Response("invalid attachment upload path; use /mcp/drafts/{id}/attachments/{filename}", { status: 400 })); }
+        catch { return uploadRefusal("invalid attachment upload path; use /mcp/drafts/{id}/attachments/{filename}", 400); }
         try { upload.encoding = uploadEncoding(request.headers.get("content-encoding")); }
-        catch (error) { return sendWebResponse(res, new Response((error as Error).message, { status: 415 })); }
+        catch (error) { return uploadRefusal((error as Error).message, 415); }
         const sha256 = request.headers.get(CHECKSUM_HEADER)?.trim();
         if (sha256 !== undefined) {
-          if (!/^[0-9A-Fa-f]{64}$/u.test(sha256)) return sendWebResponse(res, new Response(`${CHECKSUM_HEADER} must be 64 hexadecimal characters`, { status: 400 }));
+          if (!/^[0-9A-Fa-f]{64}$/u.test(sha256)) return uploadRefusal(`${CHECKSUM_HEADER} must be 64 hexadecimal characters`, 400);
           upload.sha256 = sha256.toLowerCase();
         }
         // curl and similar tools label raw bodies as form data by default; that says nothing about the file.
         const declared = request.headers.get("content-type")?.trim();
-        if (declared && !/^[\x20-\x7e]+$/u.test(declared)) return sendWebResponse(res, new Response("Content-Type must be printable ASCII", { status: 400 }));
+        if (declared && !/^[\x20-\x7e]+$/u.test(declared)) return uploadRefusal("Content-Type must be printable ASCII", 400);
         upload.contentType = declared && !/^application\/x-www-form-urlencoded\b/iu.test(declared)
           ? attachmentType(upload.filename, declared) : attachmentType(upload.filename);
       }
@@ -250,10 +266,22 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
         return sendWebResponse(res, response);
       });
       const serveUpload = (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo) => serveTransfer(provider, auth, WRITE_SCOPE, async (caller) => {
-        const body = decodedUploadBody(request.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() }), upload!.encoding);
-        const uploaded = await caller.client.uploadAttachmentStream(upload!.id, {
-          filename: upload!.filename, stream: body, contentType: upload!.contentType, ...(upload!.sha256 ? { expectedSha256: upload!.sha256 } : {}),
-        }, controller.signal);
+        const { stream, drain } = drainableBody(request.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() }), UPLOAD_DRAIN_IDLE_MS);
+        const body = decodedUploadBody(stream, upload!.encoding);
+        let uploaded: Awaited<ReturnType<typeof caller.client.uploadAttachmentStream>>;
+        try {
+          uploaded = await caller.client.uploadAttachmentStream(upload!.id, {
+            filename: upload!.filename, stream: body, contentType: upload!.contentType, ...(upload!.sha256 ? { expectedSha256: upload!.sha256 } : {}),
+          }, controller.signal);
+        } catch (error) {
+          // Answering while the client is still sending would close the connection with unread data, resetting it
+          // and losing the answer; the caller is authenticated and could send these bytes to its own draft anyway.
+          if (!(await drain())) { res.destroy(); return; }
+          if (!(error instanceof UploadInterruptedError)) throw error;
+          const refusal = await draftRefusal(caller, upload!.id, controller.signal).catch((lookup) => { throw lookup instanceof FmsgHttpError ? lookup : error; });
+          if (refusal === undefined) throw error;
+          return sendWebResponse(res, Response.json({ error: refusal }, { status: 403 }));
+        }
         return sendWebResponse(res, Response.json({ id: upload!.id, ...uploaded, type: upload!.contentType }, { status: 201 }));
       });
       const serveTransfer = async (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo, scope: string, transfer: (caller: Caller) => Promise<void>) => {
@@ -286,7 +314,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (oauthProvider && oauthHandler && !(apiKeyProvider && API_KEY_BEARER.test(authorization))) {
         try {
           const bearer = /^Bearer ([A-Za-z0-9._~+\/-]+=*)$/iu.exec(authorization);
-          if (!bearer) throw invalidToken();
+          if (!bearer) throw authorization ? invalidToken() : missingToken();
           const authenticated = await oauthProvider.verifyAccessToken(bearer[1]!);
           release = () => oauthProvider.release(authenticated);
           let parsedBody: unknown;

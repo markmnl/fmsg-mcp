@@ -151,9 +151,11 @@ describe("result clarity", () => {
       { filename: "b.txt", data: Buffer.from("b"), type: "text/plain" },
       { filename: "a.txt", data: Buffer.from("a"), type: "text/plain" },
     ] });
-    const ok = structured<{ type: string; content_type: string }>(await call(h.client, "download_attachment", { id: m.id, filename: "a.txt" }));
+    const ok = structured<{ type: string; content_type: string; text: string }>(await call(h.client, "download_attachment", { id: m.id, filename: "a.txt" }));
     expect(ok.type).toBe(ok.content_type);
     expect(ok.type).toContain("text/plain");
+    // Hosts that show models only structured content still get the file.
+    expect(ok.text).toBe("a");
     const wrong = await call(h.client, "download_attachment", { id: m.id, filename: "c.txt" });
     expect(wrong.isError).toBe(true);
     expect(text(wrong)).toContain(`Message ${m.id} has no attachment named "c.txt"`);

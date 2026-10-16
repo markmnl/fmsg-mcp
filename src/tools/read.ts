@@ -239,6 +239,7 @@ export const registerReadTools: Register = (server, deps) => {
         size: z.number(),
         content_type: z.string().describe("media type; the same value as type"),
         type: z.string().optional().describe("media type, named as on message attachment lists"),
+        text: z.string().optional().describe("the file's contents, for text attachments"),
         ...untrustedNotice,
       }),
       annotations: READ_ONLY,
@@ -259,7 +260,11 @@ export const registerReadTools: Register = (server, deps) => {
         const type = contentType ?? "application/octet-stream";
         const base = { id, filename, size: data.byteLength, content_type: type, type, ...UNTRUSTED };
         const metadata = `${filename} (${data.byteLength} bytes, ${type}) from message ${id}`;
-        if (type.toLowerCase().startsWith("text/")) return ok(messageData(`${metadata}\n\n${Buffer.from(data).toString("utf8")}`), base);
+        if (type.toLowerCase().startsWith("text/")) {
+          // Some hosts show models only structured content, so the text is there too.
+          const text = Buffer.from(data).toString("utf8");
+          return ok(messageData(`${metadata}\n\n${text}`), { ...base, text });
+        }
         const b64 = Buffer.from(data).toString("base64");
         const uri = `fmsg://message/${id}/attachment/${encodeURIComponent(filename)}`;
         const result: CallToolResult = {

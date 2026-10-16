@@ -443,6 +443,8 @@ export class FakeFmsgServer {
       return res.end(m.data);
     }
     if (method === "POST" && sub === "attach") {
+      // Like Go's net/http, close the connection rather than read a refused upload's body.
+      if (m.from !== subject || m.time !== null) res.setHeader("connection", "close");
       if (m.from !== subject) return this.json(res, 403, { error: "not the owner" });
       if (m.time !== null) return this.json(res, 403, { error: "attachments cannot be added to a sent message" });
       const raw = await readBody(req);

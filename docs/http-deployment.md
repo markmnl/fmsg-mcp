@@ -110,7 +110,8 @@ The server streams the body straight into the fmsg draft (`POST /fmsg/:id/attach
 storing it, so the draft and its attachments are visible in the user's other fmsg clients and the
 fmsg host's own size limits apply; its refusal comes back with its status and text. OAuth requires
 `fmsg:write`. The response is `201` with `filename`, `size`, `sha256` and `type`. The fmsg host may
-rename a duplicate filename; the response gives the stored name.
+rename a duplicate filename; the response gives the stored name. Errors are JSON `{"error": "..."}`,
+and the fmsg host's own reason is passed through when it gives one.
 
 - `x-content-sha256` (optional, hex): a mismatch answers `422`, and the attachment is removed again.
 - `Content-Encoding: gzip` or `deflate` (optional): the server decodes the body while streaming, so
