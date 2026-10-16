@@ -85,9 +85,10 @@ describe("HTTP attachment uploads", () => {
 
     const brotli = await put(url("b.txt"), original, { "content-encoding": "br" });
     expect(brotli.status).toBe(415);
+    expect(await brotli.json()).toEqual({ error: 'unsupported Content-Encoding "br"; use gzip or deflate, or none' });
     const truncated = await put(url("t.txt"), gzipSync(original).subarray(0, 40), { "content-encoding": "gzip" });
     expect(truncated.status).toBe(400);
-    expect((await truncated.json() as { error: string }).error).toContain("gzip request body is invalid or truncated");
+    expect((await truncated.json() as { error: string }).error).toBe("the gzip request body is invalid or truncated (the data ends early)");
     expect(fake.messages.get(id)!.attachments).toHaveLength(2);
   });
 
@@ -95,7 +96,9 @@ describe("HTTP attachment uploads", () => {
     const { id, url } = await draft();
     expect((await fetch(url("a.txt"), { method: "PUT", body: "x" })).status).toBe(401);
     expect((await put(url("a.txt"), "x", {}, "fmsgk_wrong")).status).toBe(401);
-    expect((await fetch(url("a.txt"), { headers: { authorization: "Bearer fmsgk_alice_secret" } })).status).toBe(405);
+    const get = await fetch(url("a.txt"), { headers: { authorization: "Bearer fmsgk_alice_secret" } });
+    expect(get.status).toBe(405);
+    expect(await get.json()).toEqual({ error: "use PUT to upload attachments" });
     expect((await put(`${url("a.txt")}?access_token=x`, "x")).status).toBe(400);
     expect((await put(`${base}/mcp/drafts/${id}/attachments/a%2Fb.txt`, "x")).status).toBe(400);
     expect((await put(`${base}/mcp/drafts/${id}/files/a.txt`, "x")).status).toBe(400);
@@ -140,6 +143,19 @@ describe("HTTP attachment uploads", () => {
     expect(steps).toContain("PUT its raw bytes to the draft's upload URL");
     expect(steps).toContain("3. Call send_draft");
   });
+
+  it("answers a refused large upload instead of hanging", async () => {
+    const { url } = await draft();
+    // The host closes the connection part-way, so its own reason is lost; the draft explains it instead.
+    const response = await put(url("big.bin"), randomBytes(16 * 1024 * 1024), {}, "fmsgk_bob_secret");
+    expect(response.status).toBe(403);
+    expect((await response.json() as { error: string }).error).toContain("is not your draft");
+    const sent = await draft();
+    await call(client, "send_draft", { id: sent.id });
+    const late = await put(sent.url("big.bin"), randomBytes(16 * 1024 * 1024));
+    expect(late.status).toBe(403);
+    expect((await late.json() as { error: string }).error).toContain(`message ${sent.id} was already sent`);
+  }, 15_000);
 
   it("passes upstream refusals through, such as a sent message", async () => {
     const { id, url } = await draft();

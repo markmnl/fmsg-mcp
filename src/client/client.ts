@@ -31,6 +31,18 @@ export class AttachmentChecksumError extends Error {
   }
 }
 
+/** The fmsg host closed the connection before the whole attachment was sent, so its reason, if it gave one, was lost. */
+export class UploadInterruptedError extends Error {
+  constructor(readonly filename: string, readonly sent: number, cause: unknown) {
+    const inner = cause instanceof Error ? cause.cause as (Error & { code?: string }) | undefined : undefined;
+    const detail = inner?.message || inner?.code || (cause instanceof Error ? cause.message : String(cause));
+    super(sent === 0 ? `could not send attachment ${filename} to the fmsg host (${detail})`
+      : `the fmsg host closed the connection after ${sent} bytes of attachment ${filename}, before the upload finished (${detail}); ` +
+        "it may exceed the host's attachment size limit", { cause });
+    this.name = "UploadInterruptedError";
+  }
+}
+
 export type FetchLike = typeof fetch;
 
 export type FmsgClientOptions = {
@@ -436,11 +448,14 @@ export class FmsgClient {
     const reader = attachment.stream.getReader();
     let stage = "head" as "head" | "data" | "done";
     let size = 0;
+    let pulled = false;
     let sourceError: unknown;
-    const body = new ReadableStream<Uint8Array>({
+    // The source is cancelled in finally, not when fetch drops an attempt, so an attempt that read none of it can be repeated.
+    const multipart = () => { stage = "head"; return new ReadableStream<Uint8Array>({
       async pull(controller) {
         if (stage === "head") { stage = "data"; controller.enqueue(head); return; }
         arm("attachment upload stalled waiting for data");
+        pulled = true;
         let chunk: ReadableStreamReadResult<Uint8Array>;
         try { chunk = await reader.read(); }
         catch (error) { sourceError = error; throw error; }
@@ -455,27 +470,36 @@ export class FmsgClient {
         controller.close();
         arm("attachment upload response timed out");
       },
-      cancel: (reason) => reader.cancel(reason),
-    });
+    }); };
     arm("attachment upload stalled waiting for data");
     try {
-      const response = await this.request(`/fmsg/${encodeURIComponent(mid)}/attach`, {
-        method: "POST",
-        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-        body,
-        duplex: "half",
-        signal: AbortSignal.any([deadline.signal, ...(signal ? [signal] : [])]),
-      } as RequestInit, false, "caller");
-      const result = parseFmsgJson<{ filename?: string; size?: number }>(await response.text());
-      const uploaded = { filename: result.filename ?? attachment.filename, size: result.size ?? size, sha256: hash.digest("hex") };
-      if (expected && expected !== uploaded.sha256) {
-        await this.deleteAttachment(mid, uploaded.filename).catch(() => undefined);
-        throw new AttachmentChecksumError(attachment.filename, expected, uploaded.sha256);
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const response = await this.request(`/fmsg/${encodeURIComponent(mid)}/attach`, {
+            method: "POST",
+            headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+            body: multipart(),
+            duplex: "half",
+            signal: AbortSignal.any([deadline.signal, ...(signal ? [signal] : [])]),
+          } as RequestInit, false, "caller");
+          const result = parseFmsgJson<{ filename?: string; size?: number }>(await response.text());
+          const uploaded = { filename: result.filename ?? attachment.filename, size: result.size ?? size, sha256: hash.digest("hex") };
+          if (expected && expected !== uploaded.sha256) {
+            await this.deleteAttachment(mid, uploaded.filename).catch(() => undefined);
+            throw new AttachmentChecksumError(attachment.filename, expected, uploaded.sha256);
+          }
+          return uploaded;
+        } catch (error) {
+          // Report the source's failure (such as invalid compressed data) rather than fetch's wrapper.
+          if (sourceError) throw sourceError;
+          const network = error instanceof TypeError && !deadline.signal.aborted && !signal?.aborted;
+          // A pooled connection the host had already closed fails before any of the file is read; that is safe to repeat.
+          if (network && !pulled && attempt < 3) continue;
+          // A host that refuses an upload part-way may close the connection; fetch then reports only the broken write.
+          if (network && stage !== "done") throw new UploadInterruptedError(attachment.filename, size, error);
+          throw error;
+        }
       }
-      return uploaded;
-    } catch (error) {
-      // Report the source's failure (such as invalid compressed data) rather than fetch's wrapper.
-      throw sourceError ?? error;
     } finally {
       clearTimeout(timer);
       if (stage !== "done") await reader.cancel().catch(() => undefined);

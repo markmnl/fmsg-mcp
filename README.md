@@ -224,9 +224,10 @@ original Content-Type and download filename. No files are stored on the MCP serv
 
 `send_message`, `reply` and `create_draft` take each attachment as exactly one of:
 
-- `data_base64`: base64 written by the model; fine for small files. Decoding is strict: a character
-  outside the base64 alphabet, a bad length or padding, or a stray ending is refused with the
-  attachment's name, rather than sent as a corrupted file.
+- `data_base64`: base64 written by the model; fine for small files. The standard or URL-safe
+  alphabet is accepted, but not both in one value. Decoding is strict: any other character, a bad
+  length or padding, or a stray ending is refused with the attachment's name, rather than sent as a
+  corrupted file.
 - `data_text`: text, sent as its UTF-8 bytes; no base64 overhead.
 - `path` (stdio with `FMSG_MCP_UPLOAD_DIR`): a file in that folder, streamed by the server. Paths
   are relative to the folder, and a path or symlink that leads outside it is refused.

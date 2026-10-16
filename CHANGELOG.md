@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- An upload the fmsg host refused part-way, such as a large file PUT to someone else's draft or a
+  sent message, no longer hangs until the proxy times out. The server reads the rest of the body
+  and answers with the host's reason; if the host closed the connection before giving one, the
+  draft is checked to explain it. An upload whose pooled connection had already closed is
+  repeated when none of the file had been read.
+- Upload URL refusals made before the upload starts (wrong method, bad path, unsupported
+  encoding and so on) are JSON `{"error": ...}`, like every other upload error. A truncated gzip
+  or deflate body now says the data ends early.
+- `data_base64` also accepts the URL-safe alphabet (`-` and `_`), which strict decoding refused
+  in 1.1.0; a value that mixes both alphabets is still refused.
+- `download_attachment` returns a text attachment's contents in its structured result (`text`)
+  too. Hosts such as Claude Code show models only the structured result, so the file never
+  reached the model.
+- Over OAuth, a request with no access token gets a 401 that says so, instead of asking for the
+  connection to be refreshed.
 - Large attachments no longer have to pass through the model as base64 ([#17](https://github.com/markmnl/fmsg-mcp/issues/17)).
   New `create_draft`, `send_draft` and `delete_draft` tools create a real fmsg draft that other fmsg
   clients can see. Over HTTP with a public MCP URL, `create_draft` returns an upload URL: the host

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FmsgClient, FmsgHttpError } from "../src/client/client.js";
+import { FmsgClient, FmsgHttpError, UploadInterruptedError } from "../src/client/client.js";
 import { parseFmsgJson, stringifyWithIds, normalizeMessageId } from "../src/client/message-id.js";
 import { redactSecrets } from "../src/client/redact.js";
 import { fence } from "../src/render.js";
@@ -258,6 +258,36 @@ describe("FmsgClient", () => {
     await expect(client.uploadAttachmentStream(draft.id, { filename: "t.txt", stream: stream() })).rejects.toMatchObject({ status: 401 });
     expect(fake.requests.slice(before).filter((r) => r.path.endsWith("/attach"))).toHaveLength(1);
     await expect(client.uploadAttachmentStream(draft.id, { filename: "../x", stream: stream() })).rejects.toThrow("letters, digits");
+  });
+
+  it("repeats an upload whose connection failed before reading the file, but not one cut off part-way", async () => {
+    const draft = await client.createDraft({ to: [BOB], topic: "stale", body: "b" });
+    const closed = () => Promise.reject(new TypeError("fetch failed", { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) }));
+    let stale = 1;
+    const retrying = new FmsgClient(fake.baseUrl, "fmsgk_alice_secret", {
+      fetch: (url, init) => String(url).endsWith("/attach") && stale-- > 0 ? closed() : fetch(url, init),
+    });
+    const stream = (text: string) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(text)); c.close(); } });
+    expect(await retrying.uploadAttachmentStream(draft.id, { filename: "a.txt", stream: stream("after a stale connection") })).toMatchObject({ size: 24 });
+    expect(fake.messages.get(draft.id)!.attachments.map((a) => a.data.toString())).toEqual(["after a stale connection"]);
+
+    const cutOff = new FmsgClient(fake.baseUrl, "fmsgk_alice_secret", {
+      fetch: async (url, init) => {
+        if (!String(url).endsWith("/attach")) return fetch(url, init);
+        const reader = (init!.body as ReadableStream<Uint8Array>).getReader();
+        await reader.read();
+        await reader.read();
+        return closed();
+      },
+    });
+    // The rest of the file is still to come when the host closes the connection.
+    const unfinished = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from("refused")); } });
+    const error = await cutOff.uploadAttachmentStream(draft.id, { filename: "b.txt", stream: unfinished }).catch((e: unknown) => e) as Error;
+    expect(error).toBeInstanceOf(UploadInterruptedError);
+    expect(error.message).toBe("the fmsg host closed the connection after 7 bytes of attachment b.txt, before the upload finished (other side closed); " +
+      "it may exceed the host's attachment size limit");
+    retrying.close();
+    cutOff.close();
   });
 
   it("keeps the token's address case so from matches the authenticated user", async () => {

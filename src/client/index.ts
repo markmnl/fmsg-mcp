@@ -1,4 +1,4 @@
-export { AttachmentChecksumError, FmsgClient, FmsgHttpError, type FmsgClientOptions } from "./client.js";
+export { AttachmentChecksumError, FmsgClient, FmsgHttpError, UploadInterruptedError, type FmsgClientOptions } from "./client.js";
 export type { TokenProvider, TokenProviderRequest } from "./token-provider.js";
 export { openFmsgWebSocket, parseWsEvent } from "./ws.js";
 export { redactSecrets, safeErrorMessage, type Redacted } from "./redact.js";

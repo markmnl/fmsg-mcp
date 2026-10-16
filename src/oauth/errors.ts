@@ -23,6 +23,7 @@ export class OAuthRequestError extends Error {
 }
 
 export const invalidToken = () => new OAuthRequestError(401, "invalid_token", "The OAuth connection must be refreshed or reconnected.");
+export const missingToken = () => new OAuthRequestError(401, "invalid_token", "No access token was sent; send this MCP connection's Authorization header.");
 export const insufficientScope = (scopes: string[]) => new OAuthRequestError(403, "insufficient_scope", "The OAuth connection does not authorize this operation.", scopes);
 
 export function oauthErrorResponse(error: OAuthRequestError, metadataUrl: string): Response {

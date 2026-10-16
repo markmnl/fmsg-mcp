@@ -25,7 +25,16 @@ describe("strict base64", () => {
     expect(() => decodeBase64Strict("r.pdf", "QUI===")).toThrow("invalid base64 length or padding");
     expect(decodeBase64Strict("r.pdf", "QUI=")).toEqual(Buffer.from("AB"));
     expect(() => decodeBase64Strict("r.pdf", "QUJ=")).toThrow("attachment r.pdf: invalid base64 ending");
-    expect(() => decodeBase64Strict("r.pdf", "QUJD-_")).toThrow("invalid base64 character");
+    expect(() => decodeBase64Strict("r.pdf", "QUJD.REVG")).toThrow('invalid base64 character "." at position 4');
+    expect(() => decodeBase64Strict("r.pdf", "+_8A")).toThrow(
+      'attachment r.pdf: base64 mixes the standard and URL-safe alphabets ("+" at position 0, "_" at position 1)');
+  });
+
+  it("accepts URL-safe base64, padded or not", () => {
+    const bytes = Buffer.from([0xfb, 0xff, 0xbf, 0x3e, 0x00, 0x7f]);
+    expect(decodeBase64Strict("u", bytes.toString("base64url"))).toEqual(bytes);
+    expect(decodeBase64Strict("u", "-_8=")).toEqual(Buffer.from([0xfb, 0xff]));
+    expect(() => decodeBase64Strict("u", "-_9=")).toThrow("invalid base64 ending");
   });
 });
 

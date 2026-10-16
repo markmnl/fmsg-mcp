@@ -62,7 +62,9 @@ describe("HTTP OAuth", () => {
       const response = await post(token);
       expect(response.status).toBe(401);
       expect(response.headers.get("www-authenticate")).toContain('resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"');
-      await response.body?.cancel();
+      const { error_description: description } = await response.json() as { error_description: string };
+      if (token === "invalid") expect(description).toContain("refreshed or reconnected");
+      if (token === undefined) expect(description).toBe("No access token was sent; send this MCP connection's Authorization header.");
     }
     expect(idp.requests).toHaveLength(0);
   });

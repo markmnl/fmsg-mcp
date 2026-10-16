@@ -73,13 +73,21 @@ export type AttachmentArgs = { filename: string; data_base64?: string; data_text
 export type PreparedAttachment = { filename: string; contentType: string; sha256?: string } & ({ data: Uint8Array } | { file: string });
 
 /**
- * Decode base64 strictly: only the standard alphabet and whitespace, `=` padding only at the end, a valid length, and
- * no stray trailing bits. Node's decoder skips anything else silently, which would send a corrupted file.
+ * Decode base64 strictly: one alphabet (standard, or URL-safe with - and _) plus whitespace, `=` padding only at the
+ * end, a valid length, and no stray trailing bits. Node's decoder skips anything else silently, which would send a
+ * corrupted file.
  */
 export function decodeBase64Strict(filename: string, input: string): Buffer {
-  const bad = /[^A-Za-z0-9+/=\s]/u.exec(input);
+  const bad = /[^A-Za-z0-9+/\-_=\s]/u.exec(input);
   if (bad) throw new Error(`attachment ${filename}: invalid base64 character ${JSON.stringify(bad[0])} at position ${bad.index}`);
-  const compact = input.replace(/\s+/gu, "");
+  const standard = /[+/]/u.exec(input);
+  const urlSafe = /[-_]/u.exec(input);
+  if (standard && urlSafe) {
+    const [first, second] = standard.index < urlSafe.index ? [standard, urlSafe] : [urlSafe, standard];
+    throw new Error(`attachment ${filename}: base64 mixes the standard and URL-safe alphabets (${JSON.stringify(first[0])} at position ${first.index}, ` +
+      `${JSON.stringify(second[0])} at position ${second.index}); part of the data may be corrupt`);
+  }
+  const compact = input.replace(/\s+/gu, "").replace(/-/gu, "+").replace(/_/gu, "/");
   const padding = compact.indexOf("=");
   const unpadded = padding < 0 ? compact : compact.slice(0, padding);
   if ((padding >= 0 && (!/^={1,2}$/u.test(compact.slice(padding)) || compact.length % 4 !== 0)) || unpadded.length % 4 === 1) {
