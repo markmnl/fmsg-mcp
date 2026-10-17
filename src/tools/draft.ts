@@ -1,6 +1,7 @@
 import * as z from "zod/v4";
 import { downloadBaseUrl } from "../download.js";
 import { toolError } from "../errors.js";
+import { withOwner } from "../owner.js";
 import { addressList, headerValue, isoTime } from "../render.js";
 import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../upload.js";
 import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, prepareAttachments } from "./attachments.js";
@@ -14,6 +15,7 @@ import {
 export const registerDraftTools: Register = (server, deps) => {
   const baseUrl = downloadBaseUrl(deps.config);
   const routes = fileRoutes(deps.config);
+  const includeOwner = deps.includeOwner ? { include_owner: deps.includeOwner } : {};
 
   server.registerTool(
     "create_draft",
@@ -33,6 +35,7 @@ export const registerDraftTools: Register = (server, deps) => {
         important: z.boolean().default(false).describe(IMPORTANT),
         no_reply: z.boolean().default(false).describe(NO_REPLY),
         allow_no_reply: z.boolean().default(false).describe("draft a reply even though the parent asked for no replies"),
+        ...includeOwner,
         attachments: z.array(attachmentInput(deps.config)).optional().describe("files to attach now"),
       }),
       outputSchema: outputObject({
@@ -57,7 +60,7 @@ export const registerDraftTools: Register = (server, deps) => {
       }),
       annotations: { ...SENDS, destructiveHint: false },
     },
-    async ({ to, topic, reply_to, body, type, important, no_reply, allow_no_reply, attachments }, ctx) => {
+    async ({ to, topic, reply_to, body, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) => {
       if (reply_to && topic) return toolError("a reply has no topic: pass topic only for a new message");
       if (!reply_to && !to?.length) return toolError("pass to: the recipients (or reply_to to draft a reply)");
       return withCaller(deps, ctx, async (caller, signal) => {
@@ -73,6 +76,7 @@ export const registerDraftTools: Register = (server, deps) => {
         } else {
           ({ to: recipients, resolved } = resolveRecipients(to!, resolverFor(deps, caller)));
         }
+        recipients = withOwner(caller, recipients, include_owner);
         const outbound = await prepareAttachments(attachments, deps.config);
         const hint = base64Hint(attachments, routes);
         const draft = await draftWithAttachments(caller.client, {

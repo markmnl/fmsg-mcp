@@ -148,7 +148,11 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const metadataUrl = resource ? `${resource.origin}${metadataPath}` : "";
   const shutdown = new AbortController();
   const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => createMcpHandler(({ authInfo }) =>
-    createFmsgMcpServer(provider, config, { ...(authInfo ? { address: address(authInfo) } : {}), shutdown: shutdown.signal }),
+    createFmsgMcpServer(provider, config, {
+      ...(authInfo ? { address: address(authInfo) } : {}),
+      ...(typeof authInfo?.extra?.owner === "string" ? { owner: authInfo.extra.owner } : {}),
+      shutdown: shutdown.signal,
+    }),
     { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
   );
   const oauthHandler = oauthProvider && mcpHandler(oauthProvider, (authInfo) => String(authInfo.extra?.address ?? ""));

@@ -16,6 +16,7 @@ interface TokenProvider {
   }): Promise<{
     accessToken: string;
     address: string;
+    owner?: string;
     expiresAtMs: number;
   }>;
   close?(): void;
@@ -36,6 +37,8 @@ Sharing a provider between clients risks mixing grants or closing another client
   case, and a finite future expiry in milliseconds since the Unix epoch. Use trusted
   authorization/exchange metadata; do not invent an expiry or infer identity from an
   unverified incoming token. The generic client does not decode provider tokens.
+- Optionally return `owner`, the address that owns `address` when it is a sub-address (the Web
+  API's `owner` claim); omit it for an owner's own address. `FmsgClient.owner()` exposes it.
 - Honour `signal` for all network work. It aborts when renewal times out, the client
   closes, or all callers waiting for that renewal cancel. Reject on failed/revoked
   authorization; never fall back to an owner token, API key or another grant.

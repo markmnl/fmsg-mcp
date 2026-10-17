@@ -5,6 +5,7 @@ import type { FmsgMessage } from "../client/types.js";
 import type { Config } from "../config.js";
 import type { Caller } from "../context.js";
 import { toolError } from "../errors.js";
+import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
 import { type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
@@ -118,6 +119,7 @@ export function resolvedNote(resolved: Array<{ input: string; address: string }>
 export const registerSendTools: Register = (server, deps) => {
   const attachments = z.array(attachmentInput(deps.config)).optional().describe("files");
   const guidance = attachmentGuidance(deps.config);
+  const includeOwner = deps.includeOwner ? { include_owner: deps.includeOwner } : {};
   const routes = fileRoutes(deps.config);
   server.registerTool(
     "send_message",
@@ -135,14 +137,16 @@ export const registerSendTools: Register = (server, deps) => {
         type: z.string().default("text/markdown; charset=utf-8").describe("body media type"),
         important: z.boolean().default(false).describe(IMPORTANT),
         no_reply: z.boolean().default(false).describe(NO_REPLY),
+        ...includeOwner,
         attachments,
       }),
       outputSchema: sentOutput,
       annotations: SENDS,
     },
-    async ({ to, topic, body, type, important, no_reply, attachments }, ctx) =>
+    async ({ to, topic, body, type, important, no_reply, include_owner, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
-        const { to: recipients, resolved } = resolveRecipients(to, resolverFor(deps, caller));
+        const { to: resolvedTo, resolved } = resolveRecipients(to, resolverFor(deps, caller));
+        const recipients = withOwner(caller, resolvedTo, include_owner);
         const outbound = await prepareAttachments(attachments, deps.config);
         const hint = base64Hint(attachments, routes);
         const sent = await sendWithAttachments(caller.client, { to: recipients, topic, body, type, important, noReply: no_reply }, outbound, signal);
@@ -185,17 +189,19 @@ export const registerSendTools: Register = (server, deps) => {
         important: z.boolean().default(false).describe(IMPORTANT),
         no_reply: z.boolean().default(false).describe(NO_REPLY),
         allow_no_reply: z.boolean().default(false).describe("reply even though the parent asked for no replies"),
+        ...includeOwner,
         attachments,
       }),
       outputSchema: sentOutput,
       annotations: SENDS,
     },
-    async ({ id, body, recipients, type, important, no_reply, allow_no_reply, attachments }, ctx) =>
+    async ({ id, body, recipients, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const parent = await caller.client.getMessage(id, signal);
         const target = replyRecipients(deps, caller, parent, recipients, allow_no_reply);
         if ("content" in target) return target;
-        const { to, resolved } = target;
+        const { resolved } = target;
+        const to = withOwner(caller, target.to, include_owner);
         const outbound = await prepareAttachments(attachments, deps.config);
         const hint = base64Hint(attachments, routes);
         const sent = await sendWithAttachments(caller.client, { to, pid: parent.id, body, type, important, noReply: no_reply }, outbound, signal);

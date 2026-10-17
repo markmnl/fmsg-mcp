@@ -12,6 +12,8 @@ import { UNTRUSTED_CONTENT_NOTICE, attachmentType, headerValue, isoTime, preview
 export type ToolDeps = {
   provider: CallerProvider;
   config: Config;
+  /** The include_owner argument of send-type tools; absent when the caller is known to be an owner's own address. */
+  includeOwner?: z.ZodDefault<z.ZodBoolean>;
   /** Aborted when the server begins shutting down; long waits then return early. */
   shutdown?: AbortSignal;
 };

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A sub-address (such as `@user_agent@example.com`, owned by `@user@example.com`) now sends to
+  its owner by default: `send_message`, `reply` and `create_draft` add the owner as a recipient so
+  they can follow and reply to the thread, with a new `include_owner` argument (default true) to
+  leave them off. The owner comes from the API-key token's `owner` claim; the instructions and
+  `whoami` (new `owner` field) name it, and `include_owner` is only offered when the caller may be a
+  sub-address. `FmsgClient.owner()` and the token provider's optional `owner` field expose it.
 - An upload the fmsg host refused part-way, such as a large file PUT to someone else's draft or a
   sent message, no longer hangs until the proxy times out. The server reads the rest of the body
   and answers with the host's reason; if the host closed the connection before giving one, the

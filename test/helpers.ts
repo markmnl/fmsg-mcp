@@ -4,7 +4,7 @@ import { createMcpHandler } from "@modelcontextprotocol/server";
 import { FmsgClient } from "../src/client/client.js";
 import { loadConfig, type Config, type Transport } from "../src/config.js";
 import { StaticCallerProvider, type CallerProvider } from "../src/context.js";
-import { createFmsgMcpServer } from "../src/server.js";
+import { type CreateServerOptions, createFmsgMcpServer } from "../src/server.js";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
 
 export const ALICE = "@alice@example.com";
@@ -21,11 +21,13 @@ export function configFor(fake: FakeFmsgServer, transport: Transport = "stdio", 
 export type Harness = { client: Client; close: () => Promise<void>; fmsg: FmsgClient };
 
 /** stdio-shaped: one server instance pinned to one in-memory connection. */
-export async function connectInMemory(fake: FakeFmsgServer, apiKey = "fmsgk_alice_secret", extra: Record<string, string> = {}): Promise<Harness> {
+export async function connectInMemory(
+  fake: FakeFmsgServer, apiKey = "fmsgk_alice_secret", extra: Record<string, string> = {}, options: CreateServerOptions = {},
+): Promise<Harness> {
   const config = configFor(fake, "stdio", extra);
   const fmsg = new FmsgClient(fake.baseUrl, apiKey);
   const provider = new StaticCallerProvider(fmsg);
-  const server = createFmsgMcpServer(provider, config);
+  const server = createFmsgMcpServer(provider, config, options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0.0.0" });
   await server.connect(serverTransport);
@@ -48,7 +50,10 @@ export async function connectHttpShaped(
   config = configFor(fake, "http"),
 ): Promise<Harness & { handler: McpHttpHandler }> {
   const handler = createMcpHandler(({ authInfo: a }) =>
-    createFmsgMcpServer(provider, config, a?.clientId ? { address: a.clientId } : {}),
+    createFmsgMcpServer(provider, config, {
+      ...(a?.clientId ? { address: a.clientId } : {}),
+      ...(typeof a?.extra?.owner === "string" ? { owner: a.extra.owner } : {}),
+    }),
   );
   const transport = new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
     fetch: (url, init) => handler.fetch(new Request(url, init), { authInfo }),

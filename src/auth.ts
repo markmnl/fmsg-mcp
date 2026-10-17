@@ -50,8 +50,11 @@ export class ApiKeyCallerProvider implements CallerProvider, OAuthTokenVerifier 
     this.pendingClients.add(client);
     try {
       const address = await client.address();
+      const owner = await client.owner();
       if (this.closed) throw new Error("server is closing");
-      const entry: Entry = { key, caller: { client, address, tokenExpiresAt: async () => (await client.getToken()).expiresAtMs }, lastUsed: Date.now(), active: 0 };
+      const entry: Entry = {
+        key, caller: { client, address, ...(owner ? { owner } : {}), tokenExpiresAt: async () => (await client.getToken()).expiresAtMs }, lastUsed: Date.now(), active: 0,
+      };
       this.entries.set(key, entry);
       this.log(safeErrorMessage(`authenticated ${address} (key ${key.slice(0, 8)}…)`));
       return entry;
@@ -86,7 +89,8 @@ export class ApiKeyCallerProvider implements CallerProvider, OAuthTokenVerifier 
       this.leases.set(lease, entry);
       return {
         token: key, clientId: entry.caller.address, scopes: [FMSG_SCOPE],
-        expiresAt: Math.floor(expiresAtMs / 1000), extra: { cacheKey: key, callerLease: lease },
+        expiresAt: Math.floor(expiresAtMs / 1000),
+        extra: { cacheKey: key, callerLease: lease, ...(entry.caller.owner ? { owner: entry.caller.owner } : {}) },
       };
     } catch (error) {
       if (entry) { entry.active--; this.drop(entry); }

@@ -15,10 +15,11 @@ export const registerIdentityTools: Register = (server, deps) => {
     {
       title: "Show fmsg identity",
       description:
-        "Report the fmsg address this server acts as, the fmsg Web API URL and how short names resolve; the text " +
-        "also gives the server version. Call this first if unsure who you are sending as.",
+        "Report the fmsg address this server acts as, its owner if it is a sub-address, the fmsg Web API URL and how " +
+        "short names resolve; the text also gives the server version. Call this first if unsure who you are sending as.",
       outputSchema: outputObject({
         address: z.string(),
+        owner: z.string().optional().describe("owner of this sub-address, included as a recipient of messages you send unless include_owner is false; absent for an owner's own address"),
         api_url: z.string().nullable(),
         token_expires_at: z.string().nullable().describe(
           "internal: when the server's current upstream access token expires; it is renewed automatically, so no action is needed",
@@ -37,6 +38,7 @@ export const registerIdentityTools: Register = (server, deps) => {
         const transport = TRANSPORT_LABELS[deps.config.transport];
         const structured = {
           address: caller.address,
+          ...(caller.owner ? { owner: caller.owner } : {}),
           api_url: deps.config.apiPublicUrl ?? null,
           token_expires_at: expires,
           transport: deps.config.transport,
@@ -49,6 +51,7 @@ export const registerIdentityTools: Register = (server, deps) => {
             : `You are ${addressText(caller.address)}, connected over ${transport}.`,
           `Access is renewed automatically. Server version ${VERSION}.`,
         ];
+        if (caller.owner) lines.push(`Sub-address of ${addressText(caller.owner)}, who is a recipient of messages you send unless include_owner is false.`);
         if (defaultDomain) lines.push(`Short names resolve to @name@${defaultDomain}.`);
         if (directoryNames.length) lines.push(`Directory names: ${directoryNames.join(", ")}.`);
         return ok(lines.join("\n"), structured);

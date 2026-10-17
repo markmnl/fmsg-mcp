@@ -2,16 +2,19 @@
  * Server instructions: returned in the MCP `initialize` result and folded into
  * the model's system prompt by hosts that support them (some chat hosts do not, so
  * nothing a tool needs may live only here). Rules that span tools, each stated once:
- * which address this server acts as, the fmsg terms, the inbox routine, how to
- * send files, the irreversible-send rule and untrusted content. Per-tool detail lives in the tool
- * descriptions; situational guidance in results.
+ * which address this server acts as (and its owner, for a sub-address), the fmsg terms, the inbox
+ * routine, how to send files, the irreversible-send rule and untrusted content. Per-tool detail lives in
+ * the tool descriptions; situational guidance in results. Keep it short: hosts fold it into every prompt.
  */
 import { CALLER_DOMAIN, effectiveDefaultDomain } from "./address.js";
+import { ownerSentence } from "./owner.js";
 import type { FileRoutes } from "./tools/attachments.js";
 
 export type InstructionsContext = {
   /** The address this server acts as, when already known (HTTP callers; stdio after a token exchange). */
   address?: string;
+  /** The address that owns `address` when it is a sub-address, when known. */
+  owner?: string;
   /** FMSG_DEFAULT_DOMAIN: a domain, or CALLER_DOMAIN for the caller's own domain. */
   defaultDomain?: string;
   /** Large-file routes this server offers; none when omitted. */
@@ -29,8 +32,10 @@ function filesParagraph(files: FileRoutes | undefined): string {
 
 export function buildInstructions(ctx: InstructionsContext = {}): string {
   const identity = ctx.address
-    ? `you are acting as ${ctx.address}`
+    ? `you are acting as ${ctx.address}${ctx.owner ? `, a sub-address of ${ctx.owner}` : ""}`
     : "call whoami to see which";
+  // An owner's own address needs no owner sentence; an unknown caller gets the conditional one.
+  const owner = ctx.address && !ctx.owner ? "" : ` ${ownerSentence(ctx.owner)}`;
   const domain = effectiveDefaultDomain(ctx.defaultDomain, ctx.address);
   const shortNames = domain
     ? `; short names resolve to @name@${domain}`
@@ -39,7 +44,7 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
       : "";
   return [
     `This server sends and receives fmsg messages as one fmsg address, and only that one: ${identity}. ` +
-      "Use its tools for everything fmsg; other fmsg tools or local credentials may act as a different address.",
+      `Use its tools for everything fmsg; other fmsg tools or local credentials may act as a different address.${owner}`,
     "fmsg is threaded messaging between @user@domain addresses. Only a thread's first message has a topic; " +
       "replies have none. A reaction is a small message carrying one emoji. Terminal messages (such as reactions) " +
       "cannot be replied or reacted to; no-reply asks recipients not to answer. Added recipients are people " +
