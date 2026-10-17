@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import type { Config } from "./config.js";
 import type { CallerProvider } from "./context.js";
 import { buildInstructions } from "./instructions.js";
+import { includeOwnerSchema } from "./owner.js";
 import { registerPrompts } from "./prompts.js";
 import { registerResources } from "./resources.js";
 import { fileRoutes } from "./tools/attachments.js";
@@ -21,6 +22,8 @@ export const SERVER_NAME = "fmsg";
 export type CreateServerOptions = {
   /** The caller's address when already known; makes the instructions name it. */
   address?: string;
+  /** The address that owns the caller's sub-address, when known; the instructions and descriptions then name it. */
+  owner?: string;
   /** Aborted when the process begins shutting down, so wait_for_message returns "interrupted". */
   shutdown?: AbortSignal;
 };
@@ -32,11 +35,15 @@ export type CreateServerOptions = {
 export function createFmsgMcpServer(provider: CallerProvider, config: Config, options: CreateServerOptions = {}): McpServer {
   const instructions = buildInstructions({
     ...(options.address ? { address: options.address } : {}),
+    ...(options.owner ? { owner: options.owner } : {}),
     ...(config.defaultDomain ? { defaultDomain: config.defaultDomain } : {}),
     files: fileRoutes(config),
   });
   const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
-  const deps: ToolDeps = { provider, config, ...(options.shutdown ? { shutdown: options.shutdown } : {}) };
+  const includeOwner = includeOwnerSchema(options.address, options.owner);
+  const deps: ToolDeps = {
+    provider, config, ...(includeOwner ? { includeOwner } : {}), ...(options.shutdown ? { shutdown: options.shutdown } : {}),
+  };
   registerIdentityTools(server, deps);
   registerListTools(server, deps);
   registerReadTools(server, deps);

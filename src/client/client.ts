@@ -112,6 +112,11 @@ export class FmsgClient {
     return (await this.getToken(false, signal)).address;
   }
 
+  /** The address that owns the authenticated sub-address, or undefined when acting as an owner's own address. */
+  async owner(signal?: AbortSignal): Promise<string | undefined> {
+    return (await this.getToken(false, signal)).owner;
+  }
+
   async getToken(force = false, signal?: AbortSignal): Promise<AccessToken> {
     signal?.throwIfAborted();
     this.lifetime.signal.throwIfAborted();
@@ -151,7 +156,11 @@ export class FmsgClient {
       if (!Number.isFinite(value.expiresAtMs) || value.expiresAtMs <= now) throw new Error("token provider returned an invalid or expired token lifetime");
       if (this.boundAddress !== undefined && address !== this.boundAddress) throw new Error("token provider changed the authenticated address; create a new client for a different identity");
       this.boundAddress = address;
-      const token = Object.freeze({ accessToken: value.accessToken, address, expiresAtMs: value.expiresAtMs });
+      const owner = typeof value.owner === "string" ? normalizeFmsgAddress(value.owner) : undefined;
+      if (value.owner !== undefined && !owner) throw new Error("token provider returned an invalid owner address");
+      const token = Object.freeze({
+        accessToken: value.accessToken, address, ...(owner && owner.toLowerCase() !== address.toLowerCase() ? { owner } : {}), expiresAtMs: value.expiresAtMs,
+      });
       this.refreshAtMs = token.expiresAtMs - Math.min(this.options.refreshMarginMs ?? 300_000, (token.expiresAtMs - now) / 2);
       this.token = token;
       return token;

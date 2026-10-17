@@ -40,6 +40,11 @@ Use the API URL and key for local installation below, or use your provider's API
 with an `Authorization: Bearer fmsgk_...` header. The endpoint must use the fmsg Web API that accepts
 your key.
 
+An agent's key is usually for a **sub-address** such as `@user_agent@example.com`, owned by
+`@user@example.com`. The owner can switch to the sub-address in their client, but can only follow
+and reply to threads they are a participant of. So `send_message`, `reply` and `create_draft` add the
+owner as a recipient unless `include_owner` is false; `whoami` reports the owner.
+
 ### MCP Registry
 
 Find `io.github.markmnl/fmsg-mcp` in the [official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.markmnl%2Ffmsg-mcp).
@@ -128,7 +133,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 
 | Tool | What it does |
 |---|---|
-| `whoami` | The address this server acts as, the public API URL (when known), the transport (`stdio` or `http`, which is Streamable HTTP) and short-name defaults |
+| `whoami` | The address this server acts as, its `owner` if it is a sub-address, the public API URL (when known), the transport (`stdio` or `http`, which is Streamable HTTP) and short-name defaults |
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
 | `list_messages` | Inbox, newest first, with previews, attachment types and `size` (`compressed` marks a body sent deflated); reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |

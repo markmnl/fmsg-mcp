@@ -113,6 +113,11 @@ export type AccessToken = {
   readonly accessToken: string;
   /** Authenticated fmsg address supplied by the provider; not necessarily a JWT sub. */
   readonly address: string;
+  /**
+   * The address that owns `address` when it is a sub-address (a derived sub-account such as
+   * `@user_agent@example.com`, or a delegated identity); absent when the token is the owner's own.
+   */
+  readonly owner?: string;
   readonly expiresAtMs: number;
 };
 

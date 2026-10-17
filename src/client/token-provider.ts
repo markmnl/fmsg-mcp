@@ -41,6 +41,8 @@ export class ApiKeyTokenProvider implements TokenProvider {
     const payload = decodeJwtPayload(body.access_token);
     const address = typeof payload.sub === "string" ? normalizeFmsgAddress(payload.sub) : undefined;
     if (!address) throw new Error("token JWT sub is not an fmsg address");
+    // The Web API's `owner` claim names the account a sub-address belongs to; an owner's own token has none.
+    const owner = ownerOf(payload, address);
     const expiries = [
       typeof body.expires_at === "string" ? Date.parse(body.expires_at) : Number.NaN,
       typeof payload.exp === "number" ? payload.exp * 1000 : Number.NaN,
@@ -48,10 +50,16 @@ export class ApiKeyTokenProvider implements TokenProvider {
     ].filter(Number.isFinite);
     // Never extend the JWT lifetime using a later response expiry or a guessed TTL.
     const expiresAtMs = expiries.length ? Math.min(...expiries) : Number.NaN;
-    return { accessToken: body.access_token, address, expiresAtMs };
+    return { accessToken: body.access_token, address, ...(owner ? { owner } : {}), expiresAtMs };
   }
 
   close(): void { this.apiKey = ""; }
+}
+
+/** The `owner` claim as an address, when it is one and differs from the subject. */
+export function ownerOf(payload: Record<string, unknown>, address: string): string | undefined {
+  const owner = typeof payload.owner === "string" ? normalizeFmsgAddress(payload.owner) : undefined;
+  return owner && owner.toLowerCase() !== address.toLowerCase() ? owner : undefined;
 }
 
 // Only the first-party API-key contract requires sub/exp in a JWT. Custom

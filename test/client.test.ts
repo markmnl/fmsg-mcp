@@ -297,6 +297,14 @@ describe("FmsgClient", () => {
     expect(fake.messages.get(sent.id)!.from).toBe("@Alice_ChatGPT@example.com");
   });
 
+  it("exposes the token's owner claim for a sub-address and none for an owner's own address", async () => {
+    const agent = new FmsgClient(fake.baseUrl, "fmsgk_agent_secret");
+    expect(await agent.owner()).toBe(ALICE);
+    expect(await client.owner()).toBeUndefined();
+    expect((await agent.getToken()).owner).toBe(ALICE);
+    expect("owner" in (await client.getToken())).toBe(false);
+  });
+
   it("refuses replies to terminal messages with the host's 409", async () => {
     const parent = fake.seed({ from: BOB, to: [ALICE], data: "x", terminal: true });
     await expect(client.send({ to: [BOB], pid: parent.id, body: "no" })).rejects.toMatchObject({ status: 409 });

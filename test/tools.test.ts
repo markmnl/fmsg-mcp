@@ -527,3 +527,78 @@ describe("tools (stdio-shaped)", () => {
     expect((chat.messages[0]!.content as { text: string }).text).toContain("wait_for_message");
   });
 });
+
+describe("sub-address callers", () => {
+  const AGENT = "@Alice_ChatGPT@example.com";
+  let fake: FakeFmsgServer;
+  let h: Harness;
+  beforeEach(async () => {
+    fake = new FakeFmsgServer();
+    await fake.start();
+    h = await connectInMemory(fake, "fmsgk_agent_secret", {}, { address: AGENT, owner: ALICE });
+  });
+  afterEach(async () => {
+    await h.close();
+    await fake.stop();
+  });
+
+  it("instructions and whoami name the owner in one sentence", async () => {
+    expect(h.client.getInstructions()).toContain(
+      `you are acting as ${AGENT}, a sub-address of ${ALICE}. Use its tools for everything fmsg; other fmsg tools or local credentials may act as a ` +
+      `different address. Messages you send include ${ALICE} as a recipient unless include_owner is false, so they can follow and reply.`,
+    );
+    const who = await call(h.client, "whoami");
+    expect(structured(who)).toMatchObject({ address: AGENT, owner: ALICE });
+    expect(text(who)).toContain(`Sub-address of \`${ALICE}\`, who is a recipient of messages you send unless include_owner is false.`);
+  });
+
+  it("registers include_owner on send_message, reply and create_draft, naming the owner", async () => {
+    const { tools } = await h.client.listTools();
+    for (const name of ["send_message", "reply", "create_draft"]) {
+      const schema = tools.find((t) => t.name === name)!.inputSchema as { properties: Record<string, { description?: string; default?: unknown }> };
+      expect(schema.properties.include_owner, name).toMatchObject({ default: true, description: `also send to your owner ${ALICE}` });
+    }
+    expect(tools.find((t) => t.name === "add_recipients")!.inputSchema).not.toHaveProperty("properties.include_owner");
+  });
+
+  it("an owner's own address gets neither the sentence nor the argument; an unknown caller gets the conditional forms", async () => {
+    const own = await connectInMemory(fake, "fmsgk_alice_secret", {}, { address: ALICE });
+    try {
+      expect(own.client.getInstructions()).not.toContain("owner");
+      const { tools } = await own.client.listTools();
+      expect(tools.find((t) => t.name === "send_message")!.inputSchema).not.toHaveProperty("properties.include_owner");
+      expect("owner" in structured(await call(own.client, "whoami"))).toBe(false);
+      expect(text(await call(own.client, "whoami"))).not.toContain("owner");
+      expect(structured<{ to: string[] }>(await call(own.client, "send_message", { to: [BOB], topic: "t", body: "b" })).to).toEqual([BOB]);
+    } finally { await own.close(); }
+    const unknown = await connectInMemory(fake, "fmsgk_alice_secret");
+    try {
+      expect(unknown.client.getInstructions()).toContain("If whoami shows an owner, messages you send include them as a recipient unless include_owner is false.");
+      const { tools } = await unknown.client.listTools();
+      const schema = tools.find((t) => t.name === "send_message")!.inputSchema as { properties: Record<string, { description?: string }> };
+      expect(schema.properties.include_owner!.description).toBe("also send to your owner, if whoami shows one");
+      expect(structured<{ to: string[] }>(await call(unknown.client, "send_message", { to: [BOB], topic: "t", body: "b" })).to).toEqual([BOB]);
+    } finally { await unknown.close(); }
+  });
+
+  it("adds the owner to new messages, replies and drafts unless include_owner is false or they are already on it", async () => {
+    const sent = await call(h.client, "send_message", { to: [BOB], topic: "t", body: "b" });
+    expect(structured<{ to: string[]; warnings: string[] }>(sent)).toMatchObject({ to: [BOB, ALICE], warnings: [] });
+    expect(text(sent)).toContain(`to \`${BOB}\`, \`${ALICE}\``);
+    expect(fake.messages.get(structured<{ id: string }>(sent).id)!.to).toEqual([BOB, ALICE]);
+    expect(structured<{ to: string[] }>(await call(h.client, "send_message", { to: [BOB], topic: "t", body: "b", include_owner: false })).to).toEqual([BOB]);
+    expect(structured<{ to: string[] }>(await call(h.client, "send_message", { to: ["@ALICE@example.com", BOB], topic: "t", body: "b" })).to)
+      .toEqual(["@ALICE@example.com", BOB]);
+
+    const fromBob = fake.seed({ from: BOB, to: [AGENT], topic: "q", data: "?" });
+    expect(structured<{ to: string[] }>(await call(h.client, "reply", { id: fromBob.id, body: "a" })).to).toEqual([BOB, ALICE]);
+    expect(structured<{ to: string[] }>(await call(h.client, "reply", { id: fromBob.id, body: "a", include_owner: false })).to).toEqual([BOB]);
+    const fromAlice = fake.seed({ from: ALICE, to: [AGENT, BOB], topic: "q2", data: "?" });
+    expect(structured<{ to: string[] }>(await call(h.client, "reply", { id: fromAlice.id, body: "a" })).to).toEqual([ALICE, BOB]);
+
+    const draft = await call(h.client, "create_draft", { to: [BOB], topic: "d", body: "b" });
+    expect(structured<{ to: string[] }>(draft).to).toEqual([BOB, ALICE]);
+    expect(structured<{ to: string[] }>(await call(h.client, "send_draft", { id: structured<{ draft_id: string }>(draft).draft_id })).to).toEqual([BOB, ALICE]);
+    expect(structured<{ to: string[] }>(await call(h.client, "create_draft", { reply_to: fromBob.id, body: "b", include_owner: false })).to).toEqual([BOB]);
+  });
+});

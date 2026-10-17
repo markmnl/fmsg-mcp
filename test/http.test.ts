@@ -211,6 +211,8 @@ describe("HTTP transport", () => {
     try {
       expect(structured<{ address: string; transport: string }>(await call(alice, "whoami"))).toMatchObject({ address: ALICE, transport: "http" });
       expect(structured<{ address: string }>(await call(bob, "whoami")).address).toBe(BOB);
+      expect("owner" in structured(await call(alice, "whoami"))).toBe(false);
+      expect(alice.getInstructions()).not.toContain("owner");
       fake.seed({ from: BOB, to: [ALICE], topic: "for alice", data: "hi alice" });
       expect(structured<{ count: number }>(await call(alice, "list_messages")).count).toBe(1);
       expect(structured<{ count: number }>(await call(bob, "list_messages")).count).toBe(0);
@@ -221,6 +223,19 @@ describe("HTTP transport", () => {
     } finally {
       await alice.close();
       await bob.close();
+    }
+  });
+
+  it("serves a sub-address with its owner named and included by default", async () => {
+    const agent = await connect("fmsgk_agent_secret");
+    try {
+      expect(structured(await call(agent, "whoami"))).toMatchObject({ address: "@Alice_ChatGPT@example.com", owner: ALICE });
+      expect(agent.getInstructions()).toContain(`a sub-address of ${ALICE}. `);
+      const { tools } = await agent.listTools();
+      expect(tools.find((t) => t.name === "send_message")!.inputSchema).toHaveProperty("properties.include_owner.description", `also send to your owner ${ALICE}`);
+      expect(structured<{ to: string[] }>(await call(agent, "send_message", { to: [BOB], topic: "t", body: "b" })).to).toEqual([BOB, ALICE]);
+    } finally {
+      await agent.close();
     }
   });
 

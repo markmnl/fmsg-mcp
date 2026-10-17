@@ -44,9 +44,9 @@ export type LoggedRequest = { method: string; path: string; body?: unknown; rawB
 
 const ID_FIELDS = /"(id|pid|batch_id|root_id|trigger_id)":"([0-9]+)"/gu;
 
-function jwt(sub: string, expSeconds: number, keyId: string): string {
+function jwt(sub: string, expSeconds: number, keyId: string, owner?: string): string {
   const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  return `${enc({ alg: "none", typ: "JWT" })}.${enc({ sub, exp: expSeconds, iss: "fake", api_key_id: keyId })}.sig`;
+  return `${enc({ alg: "none", typ: "JWT" })}.${enc({ sub, exp: expSeconds, iss: "fake", api_key_id: keyId, ...(owner ? { owner } : {}) })}.sig`;
 }
 
 function subjectOf(token: string | undefined): string | undefined {
@@ -85,6 +85,8 @@ export class FakeFmsgServer {
     ["fmsgk_agent_secret", "@Alice_ChatGPT@example.com"],
   ]);
   private readonly tokenKeys = new Map<string, string>();
+  /** Sub-addresses and their owners: the token for such a key carries the Web API's `owner` claim. */
+  readonly owners = new Map<string, string>([["@Alice_ChatGPT@example.com", "@alice@example.com"]]);
   /** Registered provider fixtures only; this does not simulate JWT verification or OAuth. */
   readonly providerTokens = new Map<string, AccessToken>();
   /** Fail the next request whose path matches, with this status and message. */
@@ -301,7 +303,7 @@ export class FakeFmsgServer {
       const subject = key ? this.apiKeys.get(key) : undefined;
       if (!subject) return this.json(res, 401, { error: "invalid API key" });
       const exp = Math.floor(Date.now() / 1000) + this.tokenTtlSeconds;
-      const token = jwt(subject, exp, createHash("sha256").update(key!).digest("hex"));
+      const token = jwt(subject, exp, createHash("sha256").update(key!).digest("hex"), this.owners.get(subject));
       this.tokenKeys.set(token, key!);
       return this.json(res, 200, {
         access_token: token,

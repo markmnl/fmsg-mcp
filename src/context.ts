@@ -5,6 +5,8 @@ import { FmsgClient } from "./client/client.js";
 export type Caller = {
   client: FmsgClient;
   address: string;
+  /** The address that owns `address` when it is a sub-address; the owner sees none of this caller's messages. */
+  owner?: string;
   /** When the current Web API access token expires (ms since epoch), for whoami. */
   tokenExpiresAt: () => Promise<number>;
 };
@@ -22,7 +24,8 @@ export class StaticCallerProvider implements CallerProvider {
   forRequest(): Promise<Caller> {
     this.caller ??= (async () => {
       const address = await this.client.address();
-      return { client: this.client, address, tokenExpiresAt: async () => (await this.client.getToken()).expiresAtMs };
+      const owner = await this.client.owner();
+      return { client: this.client, address, ...(owner ? { owner } : {}), tokenExpiresAt: async () => (await this.client.getToken()).expiresAtMs };
     })().catch((error) => {
       this.caller = undefined;
       throw error;

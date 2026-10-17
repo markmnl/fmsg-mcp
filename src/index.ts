@@ -115,15 +115,16 @@ async function main(): Promise<void> {
     }
     // Resolve the address once so the instructions can name it; never let a slow
     // or unreachable host hold up initialize.
-    const knownAddress = async (): Promise<string | undefined> => {
+    const knownCaller = async (): Promise<{ address: string; owner?: string } | undefined> => {
       if (!cfg.apiUrl || !cfg.apiKey) return undefined;
       const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000).unref());
-      return Promise.race([provider.forRequest(undefined).then((c) => c.address), timeout]).catch(() => undefined);
+      return Promise.race([provider.forRequest(undefined).then((c) => ({ address: c.address, ...(c.owner ? { owner: c.owner } : {}) })), timeout])
+        .catch(() => undefined);
     };
     const shutdown = new AbortController();
     const handle = serveStdio(async () => {
-      const address = await knownAddress();
-      return createFmsgMcpServer(provider, cfg, { ...(address ? { address } : {}), shutdown: shutdown.signal });
+      const known = await knownCaller();
+      return createFmsgMcpServer(provider, cfg, { ...known, shutdown: shutdown.signal });
     });
     onShutdown(async () => {
       // Let an in-flight wait write its "interrupted" result before the transport closes.
