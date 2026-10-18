@@ -540,6 +540,20 @@ describe("HTTP OAuth combined with API keys", () => {
     expect(api.requests).toHaveLength(0);
   });
 
+  it("tells a caller who sends a bare API key to add the Bearer scheme", async () => {
+    for (const authorization of ["fmsgk_alice_secret", "Basic Zm9vOmJhcg=="]) {
+      const response = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toContain(metadata);
+      const { error_description: description } = await response.json() as { error_description: string };
+      expect(description).toContain("Authorization: Bearer fmsgk_...");
+      expect(description).not.toContain("refreshed");
+    }
+    expect(idp.requests).toHaveLength(0);
+    expect(api.requests).toHaveLength(0);
+  });
+
   it("serves API-key callers through the API-key provider without contacting the authorization server", async () => {
     const oauthVerify = vi.spyOn(oauth, "verifyAccessToken");
     const issuerVerify = vi.spyOn(oauth.issuer, "verify");

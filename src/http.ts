@@ -11,7 +11,7 @@ import { ApiKeyCallerProvider, FMSG_SCOPE } from "./auth.js";
 import type { Config } from "./config.js";
 import { createFmsgMcpServer } from "./server.js";
 import { OAuthCallerProvider } from "./oauth/provider.js";
-import { invalidToken, insufficientScope, missingToken, OAuthRequestError, oauthErrorResponse, oauthRequestState, type OAuthRequestState } from "./oauth/errors.js";
+import { invalidToken, insufficientScope, missingToken, notBearer, OAuthRequestError, oauthErrorResponse, oauthRequestState, type OAuthRequestState } from "./oauth/errors.js";
 import { MESSAGING_SCOPES, READ_SCOPE, WRITE_SCOPE, requestScopes } from "./oauth/scopes.js";
 import { DOWNLOAD_PATH, downloadBaseUrl, downloadHeaders, parseDownloadPath } from "./download.js";
 import { CHECKSUM_HEADER, UPLOAD_DRAIN_IDLE_MS, UPLOAD_PATH, UploadBodyError, decodedUploadBody, drainableBody, parseUploadPath, uploadEncoding } from "./upload.js";
@@ -318,7 +318,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (oauthProvider && oauthHandler && !(apiKeyProvider && API_KEY_BEARER.test(authorization))) {
         try {
           const bearer = /^Bearer ([A-Za-z0-9._~+\/-]+=*)$/iu.exec(authorization);
-          if (!bearer) throw authorization ? invalidToken() : missingToken();
+          if (!bearer) throw !authorization ? missingToken() : /^Bearer\s/iu.test(authorization) ? invalidToken() : notBearer(!!apiKeyProvider);
           const authenticated = await oauthProvider.verifyAccessToken(bearer[1]!);
           release = () => oauthProvider.release(authenticated);
           let parsedBody: unknown;
