@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Over OAuth, the owner comes from the `owner` claim the IdP puts on the app's access token
+  (and on the exchanged Web API token), so agents that sign in (ChatGPT connectors) include
+  their owner like API-key callers do. 1.2.0 only read the API-key token's claim, so a
+  signed-in sub-address sent without its owner and `whoami` showed none.
 - A sub-address (such as `@user_agent@example.com`, owned by `@user@example.com`) now sends to
   its owner by default: `send_message`, `reply` and `create_draft` add the owner as a recipient so
   they can follow and reply to the thread, with a new `include_owner` argument (default true) to

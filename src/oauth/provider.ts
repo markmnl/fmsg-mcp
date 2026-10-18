@@ -47,7 +47,8 @@ export class OAuthCallerProvider implements CallerProvider {
         close: () => { subject = ""; },
       }, { allowInsecureHttp: this.config.allowInsecureHttp, reconnectOnTokenExpiry: true });
       entry = { key, identity, active: 0, lastUsed: Date.now(), caller: {
-        client, address: identity.address, tokenExpiresAt: async () => (await client.getToken()).expiresAtMs,
+        client, address: identity.address, ...(identity.owner ? { owner: identity.owner } : {}),
+        tokenExpiresAt: async () => (await client.getToken()).expiresAtMs,
       } };
       this.entries.set(key, entry);
     }
@@ -57,7 +58,7 @@ export class OAuthCallerProvider implements CallerProvider {
     const lease = randomUUID();
     this.leases.set(lease, entry);
     return { token: key, clientId: identity.clientId, scopes: identity.scopes, expiresAt: identity.expiresAtMs / 1000,
-      extra: { callerLease: lease, address: identity.address } };
+      extra: { callerLease: lease, address: identity.address, ...(identity.owner ? { owner: identity.owner } : {}) } };
   }
 
   private entryFor(auth: AuthInfo | undefined): Entry | undefined {

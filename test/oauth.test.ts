@@ -196,6 +196,20 @@ describe("HTTP OAuth", () => {
     }
   });
 
+  it("knows a sub-address's owner from the app token's owner claim: whoami, include_owner, and recipients", async () => {
+    const client = await connect(await idp.token({ owner: CAROL }));
+    expect(client.getInstructions()).toContain(`you are acting as ${ALICE}, a sub-address of ${CAROL}`);
+    expect(structured(await call(client, "whoami"))).toMatchObject({ address: ALICE, owner: CAROL });
+    const { tools } = await client.listTools();
+    expect(tools.find((t) => t.name === "send_message")!.inputSchema.properties).toMatchObject({ include_owner: { default: true, description: `also send to your owner ${CAROL}` } });
+    expect(structured<{ to: string[] }>(await call(client, "send_message", { to: [BOB], topic: "t", body: "b" })).to).toEqual([BOB, CAROL]);
+    expect(structured<{ to: string[] }>(await call(client, "send_message", { to: [BOB], topic: "t", body: "b", include_owner: false })).to).toEqual([BOB]);
+    // An owner equal to the subject is no owner.
+    const self = await connect(await idp.token({ owner: ALICE }));
+    expect("owner" in structured(await call(self, "whoami"))).toBe(false);
+    expect(structured<{ to: string[] }>(await call(self, "send_message", { to: [BOB], topic: "t", body: "b" })).to).toEqual([BOB]);
+  });
+
   it("isolates caches per incoming token even for the same address", async () => {
     const tokens = [await idp.token(), await idp.token(), await idp.token({ sub: BOB })];
     const connected = await Promise.all(tokens.map(connect));
