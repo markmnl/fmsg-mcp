@@ -1,12 +1,14 @@
 import { createRemoteJWKSet, customFetch, decodeJwt, decodeProtectedHeader, jwtVerify, errors } from "jose";
 import { normalizeFmsgAddress } from "../address.js";
 import { readBytes } from "../client/stream.js";
+import { ownerOf } from "../client/token-provider.js";
 import type { AccessToken } from "../client/types.js";
 import { oauthUrl, type OAuthConfig } from "./config.js";
 import { invalidToken, OAuthRequestError } from "./errors.js";
 import { parseScopes } from "./scopes.js";
 
-export type OAuthIdentity = { address: string; expiresAtMs: number; scopes: string[]; clientId: string };
+/** The verified app token: who it acts as and, for a sub-address, the `owner` claim the IdP puts on it. */
+export type OAuthIdentity = { address: string; owner?: string; expiresAtMs: number; scopes: string[]; clientId: string };
 type Metadata = { token_endpoint: string; jwks_uri: string };
 export const EXCHANGE_CACHE_MAX_MS = 300_000;
 
@@ -87,7 +89,8 @@ export class OAuthIssuer {
       const scopes = parseScopes(payload.scope);
       const expiresAtMs = Math.floor(payload.exp! * 1000);
       if (audience !== this.config.resourceUrl || !address || !scopes || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) throw invalidToken();
-      return { address, scopes, expiresAtMs, clientId: typeof payload.client_id === "string" ? payload.client_id : "oauth-client" };
+      const owner = ownerOf(payload, address);
+      return { address, ...(owner ? { owner } : {}), scopes, expiresAtMs, clientId: typeof payload.client_id === "string" ? payload.client_id : "oauth-client" };
     } catch (error) {
       if (error instanceof OAuthRequestError) throw error;
       if (error instanceof errors.JOSEError) throw invalidToken();
@@ -143,7 +146,9 @@ export class OAuthIssuer {
         tokenScopes.some(scope => !scopes.includes(scope)) || scopes.some(scope => !tokenScopes.includes(scope))) throw new Error();
       const expiresAtMs = Math.min(startedAt + body.expires_in * 1000, claims.exp * 1000, identity.expiresAtMs, startedAt + EXCHANGE_CACHE_MAX_MS);
       if (expiresAtMs <= Date.now()) throw new Error();
-      return { accessToken: body.access_token, address: identity.address, expiresAtMs };
+      // The exchanged token names the owner too; the app token's claim is the fallback.
+      const owner = ownerOf(claims, identity.address) ?? identity.owner;
+      return { accessToken: body.access_token, address: identity.address, ...(owner ? { owner } : {}), expiresAtMs };
     } catch {
       if (identity.expiresAtMs <= Date.now()) throw invalidToken();
       throw this.configurationError("exchange returned an unexpected token or scope");
