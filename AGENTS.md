@@ -33,6 +33,10 @@ src/oauth/          HTTP OAuth discovery, validation, scopes and token exchange
 src/http.ts         node:http server, /mcp + /healthz, Host/Origin allowlist, bearer gate
 src/download.ts     binary download URLs, path validation and attachment headers
 src/upload.ts       draft upload URLs and paths, Content-Encoding decoding
+src/files/          MCP file-uploads extension (io.modelcontextprotocol/files): FileInput checks, the
+                    upload flow for send-type tools, signed upload targets (PUT /mcp/uploads/{token}),
+                    and the HTTP response hook that adds inputRequests.uploads (the SDK has no MRTR
+                    extension point); see docs/files-extension-notes.md
 src/tools/*.ts      one file per tool group; src/tools/common.ts has shared schemas/helpers,
                     src/tools/attachments.ts the outbound attachment sources (base64, text, path)
 src/wait.ts         wait_for_message engine (WebSocket first, inbox catch-up, settle batching)
