@@ -17,8 +17,12 @@ type Schema = Record<string, unknown>;
  */
 const CLOSED_VALUES_ALLOWED: Record<string, string> = {};
 
-/** Tools whose 0.2.5 output schema still validates current results without relaxing additionalProperties. */
-const UNCHANGED_SINCE_0_2_5 = ["mark_read", "react", "resolve_address", "whoami"];
+/**
+ * Tools whose 0.2.5 output schema still validates current results without relaxing additionalProperties. whoami left
+ * this list when it gained server_version: hosts that show models only the structured result never saw the version
+ * in its text, and its owner field already went beyond the 0.2.5 schema for sub-addresses.
+ */
+const UNCHANGED_SINCE_0_2_5 = ["mark_read", "react", "resolve_address"];
 
 const validator = new AjvJsonSchemaValidator();
 

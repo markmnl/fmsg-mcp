@@ -98,12 +98,16 @@ server exchanges it at the fmsg host and acts as that address. `FMSG_API_KEY` mu
 FMSG_API_URL=https://api.example.com FMSG_MCP_ALLOWED_HOSTS=mcp.example.com \
   npx -y @markmnl/fmsg-mcp --http 0.0.0.0:8765
 # or
-docker build -t fmsg-mcp .
+docker build -t fmsg-mcp --build-arg FMSG_MCP_COMMIT=$(git rev-parse HEAD) \
+  --build-arg FMSG_MCP_VERSION=$(git describe --tags --abbrev=0) .
 docker run -e FMSG_API_URL=https://api.example.com \
   -e FMSG_MCP_ALLOWED_HOSTS=mcp.example.com -p 8765:8765 fmsg-mcp
 ```
 
-The MCP endpoint is `/mcp`; `/healthz` reports liveness. Use a client that supports an explicitly
+The MCP endpoint is `/mcp`; `/healthz` reports liveness, the version and the commit. `whoami` reports the
+same, so a client can confirm which deploy it is talking to: `npm run build` records them from git, and the
+Docker build arguments above do so where the build has no git history (`FMSG_MCP_COMMIT` can also be set at
+run time). Use a client that supports an explicitly
 configured `Authorization: Bearer fmsgk_...` header. Each caller supplies its own key; a shared
 header means a shared fmsg identity. For browser sign-in without user API keys, configure
 [HTTP OAuth](docs/oauth.md): the operator supplies an issuer, resource URI and exchange client.
@@ -133,7 +137,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 
 | Tool | What it does |
 |---|---|
-| `whoami` | The address this server acts as, its `owner` if it is a sub-address, the public API URL (when known), the transport (`stdio` or `http`, which is Streamable HTTP) and short-name defaults |
+| `whoami` | The address this server acts as, its `owner` if it is a sub-address, the public API URL (when known), the transport (`stdio` or `http`, which is Streamable HTTP), short-name defaults, and this server's version and commit |
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
 | `list_messages` | Inbox, newest first, with previews, attachment types and `size` (`compressed` marks a body sent deflated); reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |

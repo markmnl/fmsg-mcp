@@ -9,6 +9,7 @@ import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
 import { type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
+import { parentReference, replyParent } from "./parent.js";
 import { rootTopic } from "./read.js";
 
 export const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
@@ -179,7 +180,8 @@ export const registerSendTools: Register = (server, deps) => {
       description:
         `Send an immediate reply to a message (linking it into that thread). ${IMMUTABLE} ` +
         "By default the reply goes to everyone on the parent message — its sender, recipients and anyone added later — " +
-        "except you; pass recipients to narrow or widen that. Fails if the parent is terminal (no replies possible); " +
+        "except you; pass recipients to narrow or widen that. If you were added to the message after it was sent, you can " +
+        "reply to it but not to earlier messages in its thread. Fails if the parent is terminal (no replies possible); " +
         `a parent marked no-reply is refused unless allow_no_reply is true. Secrets are redacted. ${guidance}`,
       inputSchema: z.strictObject({
         id: idSchema.describe("message to reply to"),
@@ -197,14 +199,15 @@ export const registerSendTools: Register = (server, deps) => {
     },
     async ({ id, body, recipients, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
-        const parent = await caller.client.getMessage(id, signal);
+        const parent = await replyParent(caller, id, signal);
+        if ("content" in parent) return parent;
         const target = replyRecipients(deps, caller, parent, recipients, allow_no_reply);
         if ("content" in target) return target;
         const { resolved } = target;
         const to = withOwner(caller, target.to, include_owner);
         const outbound = await prepareAttachments(attachments, deps.config);
         const hint = base64Hint(attachments, routes);
-        const sent = await sendWithAttachments(caller.client, { to, pid: parent.id, body, type, important, noReply: no_reply }, outbound, signal);
+        const sent = await sendWithAttachments(caller.client, { to, ...parentReference(caller, parent), body, type, important, noReply: no_reply }, outbound, signal);
         const structured = {
           id: sent.id,
           time: isoTime(sent.time),

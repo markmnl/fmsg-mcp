@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeFmsgAddress, resolveAddress } from "../src/address.js";
 import type { FmsgMessage } from "../src/client/types.js";
 import { messageLine } from "../src/render.js";
@@ -226,8 +226,23 @@ describe("result clarity", () => {
     expect(text(result)).toMatch(/unread/u);
   });
 
-  it("whoami gives the server version in its text", async () => {
-    expect(text(await call(h.client, "whoami"))).toMatch(/Server version \d+\.\d+\.\d+/u);
+  it("whoami gives the server version in its text and structured result", async () => {
+    const r = await call(h.client, "whoami");
+    expect(text(r)).toMatch(/Server version \d+\.\d+\.\d+/u);
+    expect(structured<{ server_version: string }>(r).server_version).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it("names the deployed commit from FMSG_MCP_COMMIT when the build recorded none", async () => {
+    vi.resetModules();
+    vi.stubEnv("FMSG_MCP_COMMIT", "ABCDEF0123456789abcdef0123456789abcdef01");
+    try {
+      const version = await import("../src/version.js");
+      expect(version.BUILD.commit).toBe("abcdef0123456789abcdef0123456789abcdef01");
+      expect(version.VERSION_LABEL).toBe(`${version.VERSION} (commit abcdef012345)`);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 
   it("describes every input parameter", async () => {

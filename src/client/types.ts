@@ -12,6 +12,8 @@ export type RecipientDelivery = {
 };
 
 export type AddToBatch = {
+  /** The batch's protocol hash (lowercase hex). A recipient added only by this batch replies with it as the parent. */
+  sha256?: string | null;
   batch_id?: string;
   add_to_from?: string;
   to?: string[];
@@ -32,6 +34,10 @@ export type ReactionGroup = {
 export type FmsgMessage = {
   /** Present on list items and WebSocket events; absent on GET /fmsg/:id (filled in by the client). */
   id: string;
+  /** Protocol hash (lowercase hex); null for drafts and on hosts that predate message hashes. */
+  sha256?: string | null;
+  /** The exact parent hash: the parent message's, or the add-to batch's a reply was made through. */
+  psha256?: string | null;
   version?: number;
   has_pid?: boolean;
   has_add_to?: boolean;
@@ -133,6 +139,11 @@ export type SendInput = {
   type?: string;
   topic?: string;
   pid?: string;
+  /**
+   * Reply through this hash instead of `pid`: the add-to batch that added the sender to the parent. A recipient
+   * added after a message was sent may reply to it only this way. `pid` must still name the parent.
+   */
+  parentSha256?: string;
   important?: boolean;
   noReply?: boolean;
   attachments?: OutboundAttachment[];

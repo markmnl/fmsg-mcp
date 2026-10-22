@@ -1,7 +1,7 @@
 {
   "name": "@markmnl/fmsg-mcp",
   "mcpName": "io.github.markmnl/fmsg-mcp",
-  "version": "0.1.4",
+  "version": "1.2.3",
   "description": "MCP server for fmsg: send and receive federated messages from any AI agent via a deployed fmsg Web API",
   "type": "module",
   "license": "MIT",
@@ -41,6 +41,7 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "dist/build-info.json",
     "README.md",
     "SECURITY.md",
     "CHANGELOG.md",
@@ -52,7 +53,7 @@
     "server.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-info.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

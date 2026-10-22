@@ -36,7 +36,7 @@ describe("HTTP transport", () => {
   it("answers /healthz and rejects unknown paths", async () => {
     const ok = await fetch(`${base}/healthz`);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toMatchObject({ ok: true, name: "fmsg-mcp" });
+    expect(await ok.json()).toMatchObject({ ok: true, name: "fmsg-mcp", version: expect.stringMatching(/^\d+\.\d+\.\d+/u) });
     expect((await fetch(`${base}/other`)).status).toBe(404);
   });
 
