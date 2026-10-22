@@ -16,6 +16,7 @@ import { registerWaitTools } from "./tools/wait.js";
 import { registerSaveTool } from "./tools/save.js";
 import { registerDownloadTool } from "./tools/download.js";
 import { VERSION } from "./version.js";
+import type { PresignedLinks } from "./links.js";
 
 export const SERVER_NAME = "fmsg";
 
@@ -26,6 +27,8 @@ export type CreateServerOptions = {
   owner?: string;
   /** Aborted when the process begins shutting down, so wait_for_message returns "interrupted". */
   shutdown?: AbortSignal;
+  /** Issues presigned download and upload links (HTTP with a public URL). */
+  links?: PresignedLinks;
 };
 
 /**
@@ -37,12 +40,13 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
     ...(options.address ? { address: options.address } : {}),
     ...(options.owner ? { owner: options.owner } : {}),
     ...(config.defaultDomain ? { defaultDomain: config.defaultDomain } : {}),
-    files: fileRoutes(config),
+    files: fileRoutes(config, Boolean(options.links)),
   });
   const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
   const includeOwner = includeOwnerSchema(options.address, options.owner);
   const deps: ToolDeps = {
     provider, config, ...(includeOwner ? { includeOwner } : {}), ...(options.shutdown ? { shutdown: options.shutdown } : {}),
+    ...(options.links ? { links: options.links } : {}),
   };
   registerIdentityTools(server, deps);
   registerListTools(server, deps);
@@ -53,6 +57,6 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   registerDraftTools(server, deps);
   registerWaitTools(server, deps);
   registerResources(server, deps);
-  registerPrompts(server, fileRoutes(config));
+  registerPrompts(server, fileRoutes(config, Boolean(options.links)));
   return server;
 }

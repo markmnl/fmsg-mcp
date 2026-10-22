@@ -152,7 +152,8 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `react` | Set or clear your emoji reaction |
 | `mark_read` | Mark received messages read |
 | `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources; a wrong filename lists the names the message has |
-| `get_attachment_download_url` | Get a credential-free URL and resource link for an authenticated binary download; HTTP only, requires a public MCP URL; hosts that cannot send the connection's Authorization header use `download_attachment` |
+| `get_attachment_download_url` | Get a credential-free URL and resource link for an authenticated binary download; with `presigned: true`, also a single-use link valid for 5 minutes that needs no Authorization header, with its size, sha256 and a curl command. HTTP only, requires a public MCP URL |
+| `get_attachment_upload_url` | Get a single-use link valid for 5 minutes that PUTs one file of a given size and sha256 into a draft without the Authorization header, with a curl command; then `send_draft`. HTTP only, requires a public MCP URL |
 | `save_attachment` | Stream an attachment to the configured local folder; stdio only, enabled by `FMSG_MCP_DOWNLOAD_DIR` |
 | `delivery_status` | Per-recipient delivery times and fmsg response codes (`200` accepted; `null` when not recorded); for a received message, the host's own receipt records; `via` is `to` or `add_to` (added later) |
 | `wait_for_message` | Block until the next inbound message (WebSocket push), batched per thread, with thread context, skipped reactions and a `next` step that names messages from other threads (`pending_ids`) the cursor moved past |
@@ -197,6 +198,7 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_MCP_DOWNLOAD_DIR` | — | Enable `save_attachment` in stdio; folder for new files named from message ID and filename |
 | `FMSG_MCP_UPLOAD_DIR` | — | Allow attachment `path` arguments in stdio: files in this folder (or below it) are read by the server instead of written out by the model |
 | `FMSG_MCP_WAIT_MAX_SECONDS` | `230` | Cap on one `wait_for_message` call |
+| `FMSG_MCP_STATE_SECRET` | per-process random | At least 32 bytes; HMAC key for presigned links. Links still work only on the instance that issued them |
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
 | `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
 | `FMSG_MCP_ALLOWED_ORIGINS` | same origin; loopback origins on loopback binds | Comma-separated browser origins including scheme and port; an explicit list replaces the loopback default; hostname-only values are rejected |
@@ -233,7 +235,9 @@ original Content-Type and download filename. No files are stored on the MCP serv
 
 `send_message`, `reply` and `create_draft` take each attachment as exactly one of:
 
-- `data_base64`: base64 written by the model; fine for small files. The standard or URL-safe
+- `data_base64`: base64 written by the model. It passes through the model, so it is best effort: fine
+  for small files (verified exact up to 16 KB). Always pass `sha256` with it, and prefer `path` or a
+  presigned upload link for anything larger. The standard or URL-safe
   alphabet is accepted, but not both in one value. Decoding is strict: any other character, a bad
   length or padding, or a stray ending is refused with the attachment's name, rather than sent as a
   corrupted file.
@@ -247,6 +251,13 @@ the returned upload URL with the connection's Authorization header (optionally g
 with `x-content-sha256`), then `send_draft`; see
 [attachment uploads](docs/http-deployment.md#attachment-uploads). Send files as they are: fmsg
 compresses message bodies and attachments itself when it sends them.
+
+Hosts that cannot attach the connection's credentials to their own HTTP requests can still keep file
+bytes out of the model. `get_attachment_upload_url` returns a single-use, 5-minute link per draft
+file, bound to its size and sha256, with a ready-to-run `curl` command. `get_attachment_download_url`
+with `presigned: true` does the same for downloads. The link itself authorizes that one transfer. It
+holds no API key or access token, but treat it as a secret until it is used or expires. It works only
+on the server instance that issued it.
 
 Models learn the routes from the server instructions and tool descriptions, which name only the
 routes the running server offers. A model that writes a large file as base64 although a better

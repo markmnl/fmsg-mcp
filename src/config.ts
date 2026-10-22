@@ -16,6 +16,11 @@ export type HttpConfig = {
   allowedOrigins: string[];
   keyCacheMax: number;
   keyCacheTtlMs: number;
+  /**
+   * FMSG_MCP_STATE_SECRET: the HMAC key for presigned links, file-upload targets and requestState, so any instance
+   * can verify what another issued. Without it each process makes its own.
+   */
+  stateSecret?: string;
 };
 
 export type Config = {
@@ -101,6 +106,14 @@ function resolveApiPublicUrl(
   return apiUrl;
 }
 
+/** FMSG_MCP_STATE_SECRET, checked; HTTP only. */
+function stateSecret(env: NodeJS.ProcessEnv, transport: Transport): string | undefined {
+  const secret = env.FMSG_MCP_STATE_SECRET?.trim();
+  if (transport !== "http" || !secret) return undefined;
+  if (Buffer.byteLength(secret) < 32) throw new Error("FMSG_MCP_STATE_SECRET must be at least 32 bytes");
+  return secret;
+}
+
 export type ConfigOverrides = { host?: string; port?: number };
 
 export type LoadConfigOptions = {
@@ -170,6 +183,7 @@ export function loadConfig(
       allowedOrigins: listEnv(env, "FMSG_MCP_ALLOWED_ORIGINS").map(normalizeOrigin),
       keyCacheMax: intEnv(env, "FMSG_MCP_KEY_CACHE_MAX", 500),
       keyCacheTtlMs: intEnv(env, "FMSG_MCP_KEY_CACHE_TTL_SECONDS", 1800) * 1000,
+      ...(stateSecret(env, transport) ? { stateSecret: stateSecret(env, transport)! } : {}),
     },
   };
 }

@@ -19,10 +19,21 @@ export type FileRoutes = {
   uploadUrl: boolean;
   /** Attachments may name a file in FMSG_MCP_UPLOAD_DIR (stdio). */
   uploadFolder: boolean;
+  /** get_attachment_upload_url issues single-use upload links that need no credentials (HTTP). */
+  presigned: boolean;
 };
 
-export function fileRoutes(config: Config): FileRoutes {
-  return { uploadUrl: Boolean(downloadBaseUrl(config)), uploadFolder: Boolean(config.uploadDir) };
+export function fileRoutes(config: Config, presigned = false): FileRoutes {
+  const uploadUrl = Boolean(downloadBaseUrl(config));
+  return { uploadUrl, uploadFolder: Boolean(config.uploadDir), presigned: uploadUrl && presigned };
+}
+
+/** The routes for files too large for base64, in words for a model; empty when there are none. */
+export function largeFileRoutes(routes: FileRoutes): string[] {
+  return [
+    ...(routes.uploadFolder ? ["path, a file in the upload folder"] : []),
+    ...(routes.uploadUrl ? [`create_draft's upload URL${routes.presigned ? " (or a single-use link from get_attachment_upload_url)" : ""}`] : []),
+  ];
 }
 
 /** Inline base64 this long (about 48 KB of file) earns a hint about a better route next time. A hint only, never a limit. */
@@ -32,7 +43,7 @@ const BASE64_HINT_CHARS = 64 * 1024;
 export function base64Hint(items: AttachmentArgs[] | undefined, routes: FileRoutes): string | undefined {
   const large = (items ?? []).filter((a) => (a.data_base64?.length ?? 0) >= BASE64_HINT_CHARS).map((a) => a.filename);
   const better = [
-    ...(routes.uploadUrl ? ["call create_draft, PUT them to its upload URL, then call send_draft"] : []),
+    ...(routes.uploadUrl ? [`call create_draft, PUT them to its upload URL${routes.presigned ? " or to single-use links from get_attachment_upload_url" : ""}, then call send_draft`] : []),
     ...(routes.uploadFolder ? ["give their path in the upload folder instead of data_base64"] : []),
   ];
   if (!large.length || !better.length) return undefined;
@@ -45,20 +56,21 @@ function sources(config: Config): string[] {
 }
 
 /** One outbound attachment as a tool argument: a filename and exactly one source of bytes. */
-export function attachmentInput(config: Config) {
+export function attachmentInput(config: Config, routes: FileRoutes = fileRoutes(config)) {
   const names = sources(config);
+  const large = largeFileRoutes(routes);
   return z.strictObject({
     filename: z.string().regex(FILENAME, "letters, digits, dot, underscore, hyphen only").describe("file name"),
-    data_base64: z.string().optional().describe(`base64 file contents, for small files${
-      config.uploadDir ? "; give large files as path" : downloadBaseUrl(config) ? "; send large files with create_draft's upload URL" : ""
-    }. The host sets the size limit`),
+    data_base64: z.string().optional().describe("base64 file contents. You write the base64, so it is best effort: fine for " +
+      `small files (checked exact up to 16 KB). Always give sha256 with it${large.length ? `. For anything larger use ${large.join(", or ")}` : ""}. ` +
+      "The host sets the size limit"),
     data_text: z.string().optional().describe("text file contents, sent as UTF-8 bytes; use instead of data_base64 for text"),
     ...(config.uploadDir ? {
       path: z.string().min(1).optional().describe("file in the configured upload folder, relative to it; the server reads it so its bytes skip model context"),
     } : {}),
     content_type: z.string().optional().describe("inferred from the filename when omitted"),
     sha256: z.string().regex(SHA256, "64 hexadecimal characters").optional().describe(
-      "hex sha256 of the file; the attachment is refused, and nothing sent, if the bytes differ. Give it when you can compute it",
+      "hex sha256 of the file; the attachment is refused, and nothing sent, if the bytes differ. Always give it with data_base64",
     ),
   }).superRefine((a, ctx) => {
     const given = names.filter((name) => (a as Record<string, unknown>)[name] !== undefined);
