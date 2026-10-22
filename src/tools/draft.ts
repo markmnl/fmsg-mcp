@@ -6,6 +6,7 @@ import { addressList, headerValue, isoTime } from "../render.js";
 import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../upload.js";
 import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, prepareAttachments } from "./attachments.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
+import { type ParentReference, parentReference, replyParent } from "./parent.js";
 import { rootTopic } from "./read.js";
 import {
   IMMUTABLE, IMPORTANT, NO_REPLY, UPLOAD_STEPS, hintOutput, redactionNote, replyRecipients, resolveRecipients, resolvedNote, resolvedOutput,
@@ -66,13 +67,14 @@ export const registerDraftTools: Register = (server, deps) => {
       return withCaller(deps, ctx, async (caller, signal) => {
         let recipients: string[];
         let resolved: Array<{ input: string; address: string }>;
-        let pid: string | undefined;
+        let parentRef: ParentReference | undefined;
         if (reply_to) {
-          const parent = await caller.client.getMessage(reply_to, signal);
+          const parent = await replyParent(caller, reply_to, signal);
+          if ("content" in parent) return parent;
           const target = replyRecipients(deps, caller, parent, to, allow_no_reply);
           if ("content" in target) return target;
           ({ to: recipients, resolved } = target);
-          pid = parent.id;
+          parentRef = parentReference(caller, parent);
         } else {
           ({ to: recipients, resolved } = resolveRecipients(to!, resolverFor(deps, caller)));
         }
@@ -80,8 +82,9 @@ export const registerDraftTools: Register = (server, deps) => {
         const outbound = await prepareAttachments(attachments, deps.config);
         const hint = base64Hint(attachments, routes);
         const draft = await draftWithAttachments(caller.client, {
-          to: recipients, body, type, important, noReply: no_reply, ...(pid ? { pid } : { topic: topic ?? "" }),
+          to: recipients, body, type, important, noReply: no_reply, ...(parentRef ?? { topic: topic ?? "" }),
         }, outbound, signal);
+        const pid = parentRef?.pid;
         const upload = baseUrl ? {
           url_template: draftUploadUrlTemplate(baseUrl, draft.id),
           method: "PUT",

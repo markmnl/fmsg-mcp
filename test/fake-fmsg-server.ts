@@ -16,7 +16,9 @@ export type StoredMessage = {
   from: string;
   to: string[];
   to_delivery: Array<{ addr: string; time_delivered: string | null; response_code: number | null }>;
-  add_to: Array<{ batch_id: string; add_to_from: string; to: string[]; to_delivery: Array<{ addr: string; time_delivered: string | null; response_code: number | null }>; time: number }>;
+  add_to: Array<{ sha256?: string | null; batch_id: string; add_to_from: string; to: string[]; to_delivery: Array<{ addr: string; time_delivered: string | null; response_code: number | null }>; time: number }>;
+  /** The parent hash a reply was made through: the parent's own, or an add-to batch's. */
+  psha256?: string | null;
   time: number | null;
   topic: string;
   type: string;
@@ -64,6 +66,11 @@ async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return Buffer.concat(chunks);
+}
+
+/** A stand-in protocol hash: stable per message id or add-to batch id. */
+export function fakeHash(kind: "msg" | "batch", id: string): string {
+  return createHash("sha256").update(`${kind}:${id}`).digest("hex");
 }
 
 function isText(type: string): boolean {
@@ -235,6 +242,8 @@ export class FakeFmsgServer {
     const timeRead = m.readBy.get(subject) ?? null;
     const short = this.shortText(m);
     return {
+      sha256: m.time === null ? null : fakeHash("msg", m.id),
+      psha256: m.psha256 ?? (m.pid ? fakeHash("msg", m.pid) : null),
       version: m.version,
       has_pid: m.pid !== null,
       has_add_to: m.add_to.length > 0,
@@ -246,7 +255,7 @@ export class FakeFmsgServer {
       from: m.from,
       to: m.to,
       to_delivery: m.to_delivery,
-      add_to: m.add_to,
+      add_to: m.add_to.map((b) => ({ sha256: b.sha256 === undefined ? fakeHash("batch", b.batch_id) : b.sha256, ...b })),
       time: m.time,
       topic: m.topic,
       type: m.type,
@@ -352,14 +361,32 @@ export class FakeFmsgServer {
       if (input.from !== subject) return this.json(res, 403, { error: "from does not match the authenticated address" });
       if (!Array.isArray(input.to) || input.to.length === 0) return this.json(res, 400, { error: "to is required" });
       let pid: string | null = null;
+      let psha256: string | null = null;
       if (input.pid !== undefined && input.pid !== null) {
-        if (typeof input.pid !== "number") return this.json(res, 400, { error: "json: cannot unmarshal pid" });
-        const pidStr = /"pid":\s*([0-9]+)/u.exec(raw)?.[1] ?? String(input.pid);
-        const parent = this.messages.get(pidStr);
-        if (!parent || parent.deleted) return this.json(res, 400, { error: `PID ${pidStr} not found` });
-        if (parent.terminal) return this.json(res, 409, { error: `PID ${pidStr} is terminal; it cannot be replied to` });
+        // Like fmsg-webapi: a numeric parent id, or the 64-hex hash of a message or of an add-to batch.
+        let parent: StoredMessage | undefined;
+        let batch: StoredMessage["add_to"][number] | undefined;
+        if (typeof input.pid === "string") {
+          const hash = input.pid.toLowerCase();
+          if (!/^[0-9a-f]{64}$/u.test(hash)) return this.json(res, 400, { error: "pid must be a positive integer or a 64-character sha256 string" });
+          for (const m of this.messages.values()) {
+            if (m.time !== null && fakeHash("msg", m.id) === hash) parent = m;
+            const b = m.add_to.find((x) => (x.sha256 === undefined ? fakeHash("batch", x.batch_id) : x.sha256) === hash);
+            if (b) { parent = m; batch = b; }
+          }
+          if (!parent) return this.json(res, 400, { error: "parent message not found" });
+          psha256 = hash;
+        } else if (typeof input.pid === "number") {
+          const pidStr = /"pid":\s*([0-9]+)/u.exec(raw)?.[1] ?? String(input.pid);
+          parent = this.messages.get(pidStr);
+          if (!parent) return this.json(res, 400, { error: `PID ${pidStr} not found` });
+        } else return this.json(res, 400, { error: "json: cannot unmarshal pid" });
+        if (parent.deleted) return this.json(res, 400, { error: `PID ${parent.id} not found` });
+        const participant = parent.from === subject || parent.to.includes(subject) || (batch?.to.includes(subject) ?? false);
+        if (!participant) return this.json(res, 403, { error: "not a participant of this parent; added recipients must use their batch sha256" });
+        if (parent.terminal) return this.json(res, 409, { error: `PID ${parent.id} is terminal; it cannot be replied to` });
         if (typeof input.topic === "string" && input.topic !== "") return this.json(res, 400, { error: "topic must be empty when pid is set" });
-        pid = pidStr;
+        pid = parent.id;
       }
       const m = this.seed({
         from: subject,
@@ -373,6 +400,7 @@ export class FakeFmsgServer {
         terminal: input.terminal === true,
         time: null,
       });
+      if (psha256) m.psha256 = psha256;
       return this.json(res, 201, { id: m.id });
     }
 

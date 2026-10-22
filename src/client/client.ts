@@ -383,7 +383,9 @@ export class FmsgClient {
       ...(input.important ? { important: true } : {}),
       ...(input.noReply ? { no_reply: true } : {}),
     };
-    const serialized = input.pid ? stringifyWithIds(body, { pid: input.pid }) : JSON.stringify(body);
+    // The Web API takes the parent as a numeric id or a hash string; an added recipient must use their batch's hash.
+    const serialized = input.parentSha256 ? JSON.stringify({ ...body, pid: input.parentSha256 })
+      : input.pid ? stringifyWithIds(body, { pid: input.pid }) : JSON.stringify(body);
     const response = await this.request("/fmsg", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -402,6 +404,9 @@ export class FmsgClient {
   async createDraft(input: DraftInput): Promise<DraftResult> {
     if (input.to.length === 0) throw new Error("at least one recipient is required");
     if (input.pid && input.topic) throw new Error("a reply (pid) cannot carry a topic");
+    if (input.parentSha256 !== undefined && (!input.pid || !/^[0-9a-f]{64}$/u.test(input.parentSha256))) {
+      throw new Error("parentSha256 must be 64 lowercase hexadecimal characters, given with pid");
+    }
     const from = await this.address(input.signal);
     const body = redactSecrets(input.body);
     const topic = redactSecrets(input.pid ? "" : (input.topic ?? ""));
