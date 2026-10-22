@@ -127,6 +127,21 @@ The server does the proxying to the fmsg host itself: a TLS proxy that forwards 
 Caddy example above, needs no upload-specific settings. Proxies that cap request bodies by default
 (nginx's `client_max_body_size` is 1 MB) should not cap them below the fmsg host's attachment limit.
 
+### Presigned links
+
+`get_attachment_download_url` with `presigned: true` and `get_attachment_upload_url` return links
+under `/mcp/links/{token}` for hosts that cannot send the connection's Authorization header with their
+own HTTP requests. Such a link carries a signed capability for one transfer:
+
+- **GET** downloads one attachment.
+- **PUT** uploads one file of the declared size and sha256 into one draft.
+
+The link is single-use and valid for 5 minutes. It never contains the API key or an access token,
+but anyone holding it can make that one transfer until it is used or expires, so hosts should treat
+it as a secret. The caller a link acts for is kept in the process that issued it. Behind a load
+balancer, the link therefore works only when the request reaches that instance; elsewhere the answer
+is `404` with a message saying so. The proxy setup above already forwards these paths.
+
 Host and Origin validation applies to downloads and uploads too. Allowed browser clients can preflight GET
 with Authorization and read Content-Disposition. Hosts must attach the connection credential
 themselves; never ask the model to locate or copy tokens. Clients that cannot fetch authenticated

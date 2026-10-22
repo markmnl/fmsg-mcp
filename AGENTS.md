@@ -71,7 +71,9 @@ See `docs/oauth.md` for the vendor-neutral claims contract and deployment requir
 HTTP attachment downloads at `/mcp/attachments/{id}/{filename}` reuse the bearer gate and upstream
 caller; OAuth requires `fmsg:read`. Uploads (`PUT /mcp/drafts/{id}/attachments/{filename}`) do the
 same with `fmsg:write` and stream into the upstream draft; never stage file bytes on this server. Link generation uses only the configured public MCP URL (the
-OAuth resource URL by default), never Host or forwarded headers. Keep credentials out of links.
+OAuth resource URL by default), never Host or forwarded headers. Keep credentials out of links: the only
+exception is a presigned link (`src/links.ts`, `/mcp/links/{token}`), a signed, single-use, 5-minute
+capability for one transfer bound to its file, size and sha256. It never contains an API key or access token.
 
 ## Adding a tool
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Presigned links for hosts that cannot send the connection's Authorization header with their own HTTP
+  requests: `get_attachment_download_url` with `presigned: true`, and the new `get_attachment_upload_url` for
+  draft files. Each link is single-use, valid for 5 minutes and bound to one file's size and sha256 (`/mcp/links/{token}`),
+  and comes with its `expires_at`, `size`, `sha256` and a ready-to-run `curl` command. A download whose
+  attachment changed since the link was issued is refused or cut off before its last bytes. `FMSG_MCP_STATE_SECRET` (at least 32 bytes)
+  sets the signing key.
+- `data_base64` is described as best effort, because the base64 passes through the model: fine for small
+  files (verified exact up to 16 KB), always with `sha256`, and `path` or a presigned link for anything larger.
 - A recipient added to a message after it was sent can reply to it. The Web API takes such a reply only
   through the hash of the add-to batch that added them; `reply`, `create_draft` (and so `send_draft`) now
   send it as the parent, where before the host refused with "not a participant of this parent". A reply

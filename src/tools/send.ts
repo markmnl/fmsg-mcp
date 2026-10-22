@@ -7,7 +7,7 @@ import type { Caller } from "../context.js";
 import { toolError } from "../errors.js";
 import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
-import { type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
+import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { parentReference, replyParent } from "./parent.js";
 import { rootTopic } from "./read.js";
@@ -20,15 +20,22 @@ export const NO_REPLY = "ask recipients (and their agents) not to reply";
 /** The upload-URL route, stated in full wherever a model may read about it. */
 export const UPLOAD_STEPS = "PUT each file's raw bytes to the draft's upload URL with this connection's Authorization header, then call " +
   "send_draft. If your host cannot send this connection's credentials, use data_base64; never look for or copy credentials";
+/** UPLOAD_STEPS where get_attachment_upload_url is registered. */
+export const UPLOAD_STEPS_PRESIGNED = "PUT each file's raw bytes to the draft's upload URL with this connection's Authorization header, then call " +
+  "send_draft. If your host cannot send this connection's credentials, get a single-use link per file from get_attachment_upload_url " +
+  "instead; never look for or copy credentials";
+
+export function uploadSteps(routes: FileRoutes): string {
+  return routes.presigned ? UPLOAD_STEPS_PRESIGNED : UPLOAD_STEPS;
+}
 
 /** How to send files without the model writing their bytes, naming only what this server registered. */
-export function attachmentGuidance(config: Config): string {
-  const routes = fileRoutes(config);
+export function attachmentGuidance(config: Config, routes: FileRoutes = fileRoutes(config)): string {
   const large = [
-    ...(routes.uploadUrl ? [`use create_draft instead: ${UPLOAD_STEPS}`] : []),
+    ...(routes.uploadUrl ? [`use create_draft instead: ${uploadSteps(routes)}`] : []),
     ...(routes.uploadFolder ? ["give path, a file in the upload folder"] : []),
   ];
-  return "Files: data_text for text, data_base64 for small files; add sha256 when you can. " +
+  return "Files: data_text for text; data_base64 for small files, best effort, always with sha256. " +
     (large.length ? `For large files, ${large.join(". Or ")}. ` : "") +
     "Send files as they are; fmsg compresses them.";
 }
@@ -118,10 +125,10 @@ export function resolvedNote(resolved: Array<{ input: string; address: string }>
 }
 
 export const registerSendTools: Register = (server, deps) => {
-  const attachments = z.array(attachmentInput(deps.config)).optional().describe("files");
-  const guidance = attachmentGuidance(deps.config);
+  const routes = fileRoutes(deps.config, Boolean(deps.links));
+  const attachments = z.array(attachmentInput(deps.config, routes)).optional().describe("files");
+  const guidance = attachmentGuidance(deps.config, routes);
   const includeOwner = deps.includeOwner ? { include_owner: deps.includeOwner } : {};
-  const routes = fileRoutes(deps.config);
   server.registerTool(
     "send_message",
     {

@@ -12,6 +12,7 @@ export const TOOL_SCOPES: Record<string, string[]> = {
   send_message: [WRITE_SCOPE], reply: MESSAGING_SCOPES,
   mark_read: [WRITE_SCOPE], add_recipients: [WRITE_SCOPE], react: [WRITE_SCOPE],
   create_draft: MESSAGING_SCOPES, send_draft: MESSAGING_SCOPES, delete_draft: MESSAGING_SCOPES,
+  get_attachment_upload_url: MESSAGING_SCOPES,
 };
 
 export function parseScopes(value: unknown): string[] | undefined {

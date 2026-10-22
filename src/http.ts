@@ -14,7 +14,7 @@ import { OAuthCallerProvider } from "./oauth/provider.js";
 import { invalidToken, insufficientScope, missingToken, notBearer, OAuthRequestError, oauthErrorResponse, oauthRequestState, type OAuthRequestState } from "./oauth/errors.js";
 import { MESSAGING_SCOPES, READ_SCOPE, WRITE_SCOPE, requestScopes } from "./oauth/scopes.js";
 import { DOWNLOAD_PATH, downloadBaseUrl, downloadHeaders, parseDownloadPath } from "./download.js";
-import { CHECKSUM_HEADER, UPLOAD_DRAIN_IDLE_MS, UPLOAD_PATH, UploadBodyError, decodedUploadBody, drainableBody, parseUploadPath, uploadEncoding } from "./upload.js";
+import { CHECKSUM_HEADER, UPLOAD_DRAIN_IDLE_MS, UPLOAD_PATH, UploadBodyError, decodedUploadBody, drainableBody, parseUploadPath, streamIntoDraft, uploadEncoding } from "./upload.js";
 import { AttachmentChecksumError, UploadInterruptedError } from "./client/client.js";
 import { FmsgHttpError } from "./client/errors.js";
 import { sameAddress } from "./address.js";
@@ -24,6 +24,8 @@ import type { Caller, CallerProvider } from "./context.js";
 import { BUILD, VERSION } from "./version.js";
 import { safeErrorMessage } from "./client/redact.js";
 import { isLoopbackHost, normalizeOrigin } from "./client/url.js";
+import { LINK_PATH, PresignedLinks } from "./links.js";
+import { createHash } from "node:crypto";
 
 export const MCP_PATH = "/mcp";
 /** How long close() lets in-flight requests finish (waits end at once) before cutting them off. */
@@ -128,6 +130,77 @@ async function draftRefusal(caller: Caller, id: string, signal: AbortSignal): Pr
   return undefined;
 }
 
+/** A presigned download's attachment is no longer the bytes its link was issued for. */
+class AttachmentChangedError extends Error {
+  constructor() { super("the attachment changed since this link was issued; ask for a new link"); this.name = "AttachmentChangedError"; }
+}
+
+/**
+ * The body as a stream that fails unless it is exactly `size` bytes with SHA-256 `sha256`. The last chunk is held
+ * back until the whole body is verified, so a client never receives all `size` bytes of a file that does not match.
+ */
+function verified(body: ReadableStream<Uint8Array>, size: number, sha256: string): ReadableStream<Uint8Array> {
+  const hash = createHash("sha256");
+  let read = 0;
+  let held: Uint8Array | undefined;
+  const changed = () => new AttachmentChangedError();
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      read += chunk.byteLength;
+      if (read > size) { controller.error(changed()); return; }
+      hash.update(chunk);
+      if (held) controller.enqueue(held);
+      held = chunk;
+    },
+    flush(controller) {
+      if (read !== size || hash.digest("hex") !== sha256) { controller.error(changed()); return; }
+      if (held) controller.enqueue(held);
+    },
+  }));
+}
+
+/**
+ * Serve a presigned link: no Authorization header, the link itself authorizes one transfer. GET streams the
+ * attachment, cutting the transfer off if its bytes are not the size and SHA-256 the link was issued for; PUT
+ * takes one file of the declared size and SHA-256 into the draft.
+ */
+async function serveLink(links: PresignedLinks, url: URL, request: Request, res: ServerResponse, signal: AbortSignal): Promise<void> {
+  const refuse = (status: number, error: string, headers: Record<string, string> = {}) => sendWebResponse(res, Response.json({ error }, { status, headers }));
+  const method = request.method;
+  if (method !== "GET" && method !== "PUT") return refuse(405, "use GET or PUT, as the link says", { allow: "GET, PUT, OPTIONS" });
+  if (url.search) return refuse(400, "presigned links must not have query parameters");
+  const token = url.pathname.slice(LINK_PATH.length + 1);
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(token)) return refuse(404, "unknown link");
+  const resolved = links.resolve(token, method);
+  if ("status" in resolved) return refuse(resolved.status, resolved.error);
+  const { claims, caller } = resolved;
+  try {
+    if (claims.k === "get") {
+      const { stream, contentType } = await caller.client.streamAttachment(claims.m, claims.n, signal);
+      // Spend the link only once the attachment is there, so a concurrent request cannot use it twice.
+      if (!links.consume(claims.j)) { await stream.cancel(); return refuse(409, "this link was already used; each link downloads once"); }
+      const headers = downloadHeaders(claims.n, contentType);
+      headers.set("content-length", String(claims.s));
+      headers.set(CHECKSUM_HEADER, claims.h);
+      return await sendWebResponse(res, new Response(verified(stream, claims.s, claims.h), { headers }));
+    }
+    let encoding: string | undefined;
+    try { encoding = uploadEncoding(request.headers.get("content-encoding")); }
+    catch (error) { return refuse(415, (error as Error).message); }
+    const response = await streamIntoDraft(links, caller, {
+      draft: claims.m, filename: claims.n, size: claims.s, sha256: claims.h, mimeType: claims.t ?? attachmentType(claims.n),
+    }, request, encoding, signal, "link");
+    return await sendWebResponse(res, response);
+  } catch (error) {
+    if ((error as { undrained?: boolean }).undrained || res.headersSent) { res.destroy(); return; }
+    if (res.destroyed || signal.aborted) return;
+    if (error instanceof AttachmentChangedError) return refuse(409, error.message);
+    const status = error instanceof AttachmentChecksumError ? 422 : error instanceof UploadBodyError ? 400
+      : error instanceof FmsgHttpError && error.status >= 400 && error.status <= 599 && error.status !== 401 ? error.status : 502;
+    return refuse(status, describeError(error));
+  }
+}
+
 export function createHttpServer(config: Config, log: (line: string) => void = (l) => console.error(l)): HttpServerHandle {
   const allowedHosts = config.http.allowedHosts.length
     ? config.http.allowedHosts
@@ -147,11 +220,14 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const metadataPath = resource ? `/.well-known/oauth-protected-resource${resource.pathname === "/" ? "" : resource.pathname}` : undefined;
   const metadataUrl = resource ? `${resource.origin}${metadataPath}` : "";
   const shutdown = new AbortController();
+  // Presigned links need the public URL to build them; they carry their own authorization.
+  const links = downloadBaseUrl(config) ? new PresignedLinks(downloadBaseUrl(config)!, config.http.stateSecret) : undefined;
   const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => createMcpHandler(({ authInfo }) =>
     createFmsgMcpServer(provider, config, {
       ...(authInfo ? { address: address(authInfo) } : {}),
       ...(typeof authInfo?.extra?.owner === "string" ? { owner: authInfo.extra.owner } : {}),
       shutdown: shutdown.signal,
+      ...(links ? { links } : {}),
     }),
     { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
   );
@@ -172,11 +248,13 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     res.once("close", abort);
     const url = new URL(req.url ?? "/", "http://localhost");
     const isUpload = url.pathname.startsWith(`${UPLOAD_PATH}/`);
+    const isLink = Boolean(links) && url.pathname.startsWith(`${LINK_PATH}/`);
+    const streamsBody = isUpload || (isLink && req.method === "PUT");
     // A progressing upload may take longer than any fixed budget; the upload stream has an idle timeout instead.
     // Closing the connection afterwards stops Node reading the rest of an upload refused before authentication;
     // an authenticated caller's failed upload is drained first so its answer arrives (see serveUpload).
-    const bodyTimer = isUpload ? undefined : setTimeout(() => { if (!req.complete) req.destroy(); }, REQUEST_BODY_TIMEOUT_MS).unref();
-    if (isUpload) res.setHeader("connection", "close");
+    const bodyTimer = streamsBody ? undefined : setTimeout(() => { if (!req.complete) req.destroy(); }, REQUEST_BODY_TIMEOUT_MS).unref();
+    if (streamsBody) res.setHeader("connection", "close");
     const done = (async () => {
       const isDownload = url.pathname.startsWith(`${DOWNLOAD_PATH}/`);
       if (url.pathname === "/healthz") {
@@ -195,7 +273,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
           bearer_methods_supported: ["header"], resource_name: "fmsg messaging",
         }, { headers }));
       }
-      if (url.pathname !== MCP_PATH && !isDownload && !isUpload) {
+      if (url.pathname !== MCP_PATH && !isDownload && !isUpload && !isLink) {
         res.writeHead(404, { "content-type": "text/plain" });
         res.end("not found; the MCP endpoint is /mcp");
         return;
@@ -224,7 +302,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (req.method === "OPTIONS") {
         const method = request.headers.get("access-control-request-method") ?? "";
         const headers = (request.headers.get("access-control-request-headers") ?? "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
-        const methods = isDownload ? ["GET"] : isUpload ? ["PUT"] : CORS_METHODS;
+        const methods = isDownload ? ["GET"] : isUpload ? ["PUT"] : isLink ? ["GET", "PUT"] : CORS_METHODS;
         if (!origin || !methods.includes(method) || headers.some((h) => !CORS_HEADERS.includes(h))) {
           return sendWebResponse(res, new Response("preflight not allowed", { status: 403 }));
         }
@@ -240,6 +318,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
         try { download = parseDownloadPath(url.pathname); }
         catch { return sendWebResponse(res, new Response("invalid attachment download path", { status: 400 })); }
       }
+      if (isLink) return serveLink(links!, url, request, res, controller.signal);
       let upload: (ReturnType<typeof parseUploadPath> & { encoding?: string; contentType: string; sha256?: string }) | undefined;
       if (isUpload) {
         // Refusals are JSON, like the errors from the upload itself.
@@ -404,6 +483,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     }
     oauthProvider?.close();
     apiKeyProvider?.close();
+    links?.close();
     await Promise.all([oauthHandler?.close(), apiKeyHandler?.close()]);
     // Aborted fetches may open replacement sockets without a request, so
     // they are absent from `active` and must also be closed on shutdown.

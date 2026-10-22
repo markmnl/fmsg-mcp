@@ -3,6 +3,7 @@ import * as z from "zod/v4";
 import type { AddressResolver } from "../address.js";
 import type { FmsgMessage, RecipientDelivery } from "../client/types.js";
 import type { Config } from "../config.js";
+import type { PresignedLinks } from "../links.js";
 import { type Caller, type CallerProvider, callerFor } from "../context.js";
 import { toolError } from "../errors.js";
 import { OAuthRequestError } from "../oauth/errors.js";
@@ -16,6 +17,8 @@ export type ToolDeps = {
   includeOwner?: z.ZodDefault<z.ZodBoolean>;
   /** Aborted when the server begins shutting down; long waits then return early. */
   shutdown?: AbortSignal;
+  /** Presigned links, when this server has a public URL. */
+  links?: PresignedLinks;
 };
 
 export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };

@@ -122,25 +122,30 @@ describe("HTTP attachment uploads", () => {
     const send = tools.find((t) => t.name === "send_message")!;
     // Hosts may skip server instructions, so each tool carries the whole route on its own.
     const steps = "PUT each file's raw bytes to the draft's upload URL with this connection's Authorization header, then call send_draft. " +
-      "If your host cannot send this connection's credentials, use data_base64; never look for or copy credentials.";
+      "If your host cannot send this connection's credentials, get a single-use link per file from get_attachment_upload_url instead; " +
+      "never look for or copy credentials.";
     for (const name of ["send_message", "reply", "create_draft"]) expect(tools.find((t) => t.name === name)!.description, name).toContain(steps);
     expect(send.description).toContain("For large files, use create_draft instead: PUT");
     expect(send.description).toContain("Send files as they are; fmsg compresses them.");
-    expect(JSON.stringify(send.inputSchema)).toContain("send large files with create_draft's upload URL");
+    expect(JSON.stringify(send.inputSchema)).toContain("best effort: fine for small files (checked exact up to 16 KB). Always give sha256 with it. " +
+      "For anything larger use create_draft's upload URL (or a single-use link from get_attachment_upload_url). The host sets the size limit");
     expect(JSON.stringify(send.inputSchema)).not.toContain("upload folder");
   });
 
   it("points large base64 at the upload URL in instructions, results and the send_file prompt", async () => {
     const instructions = client.getInstructions() ?? "";
-    expect(instructions).toContain("Files: data_text for text, data_base64 for small files. Large files: create_draft, PUT each file to its upload URL, then send_draft.");
+    expect(instructions).toContain("Files: data_text for text, data_base64 for small files (best effort; always add sha256). " +
+      "Large files: create_draft, PUT each file to its upload URL (or a get_attachment_upload_url link), then send_draft.");
     expect(instructions).not.toContain("upload folder");
     const big = Buffer.alloc(49_152, 1).toString("base64");
     const created = structured<{ hint?: string }>(await call(client, "create_draft", { to: [BOB], topic: "t", body: "b", attachments: [{ filename: "big.bin", data_base64: big }] }));
-    expect(created.hint).toBe("big.bin went inline as base64. Next time, send files this large without writing their bytes: call create_draft, PUT them to its upload URL, then call send_draft.");
+    expect(created.hint).toBe("big.bin went inline as base64. Next time, send files this large without writing their bytes: " +
+      "call create_draft, PUT them to its upload URL or to single-use links from get_attachment_upload_url, then call send_draft.");
     const prompt = await client.getPrompt({ name: "send_file", arguments: { files: "a.pdf, b.zip", reply_to: "42" } });
     const steps = (prompt.messages[0]!.content as { text: string }).text;
     expect(steps).toContain('1. Call create_draft with reply_to "42"');
     expect(steps).toContain("PUT its raw bytes to the draft's upload URL");
+    expect(steps).toContain("get a single-use link for each file from get_attachment_upload_url");
     expect(steps).toContain("3. Call send_draft");
   });
 

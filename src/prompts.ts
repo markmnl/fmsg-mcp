@@ -7,13 +7,15 @@ function sendFileSteps(routes: FileRoutes, to: string | undefined, replyTo: stri
   const recipients = to ? `to ${to}, with a short topic` : "to the recipients I name (ask me if I have not)";
   const draft = replyTo ? `with reply_to "${replyTo}"${to ? ` and to: ${to}` : ""}` : recipients;
   const direct = replyTo ? `reply with id "${replyTo}"${to ? ` and recipients: ${to}` : ""}` : `send_message ${recipients}`;
-  const inline = "attach text files as data_text and small binary files as data_base64, each with its sha256 when you can compute it";
+  const inline = "attach text files as data_text and small binary files as data_base64 with their sha256 (base64 is best effort, so keep it for small files)";
   if (routes.uploadUrl) {
     return [
       `1. Call create_draft ${draft}; ${inline}.`,
       "2. For each larger file, PUT its raw bytes to the draft's upload URL with your host's authenticated HTTP tools, " +
         "sending its sha256 in x-content-sha256, and check each response's size and sha256. If your host cannot send this " +
-        "connection's credentials with its own requests, recreate the draft with the file as data_base64 instead; never look for or copy credentials.",
+        "connection's credentials with its own requests, " + (routes.presigned
+          ? "get a single-use link for each file from get_attachment_upload_url and run the curl command it returns"
+          : "recreate the draft with the file as data_base64 instead") + "; never look for or copy credentials.",
       "3. Call send_draft with the draft id and tell me what was sent. If a step fails, call delete_draft unless I want to keep the draft.",
     ];
   }
