@@ -24,6 +24,8 @@ import type { Caller, CallerProvider } from "./context.js";
 import { BUILD, VERSION } from "./version.js";
 import { safeErrorMessage } from "./client/redact.js";
 import { isLoopbackHost, normalizeOrigin } from "./client/url.js";
+import { FilesRuntime, TARGET_PATH } from "./files/runtime.js";
+import { receiveUpload, targetToken } from "./files/upload-route.js";
 import { LINK_PATH, PresignedLinks } from "./links.js";
 import { createHash } from "node:crypto";
 
@@ -117,6 +119,8 @@ export type HttpServerHandle = {
   provider: ApiKeyCallerProvider | OAuthCallerProvider;
   /** Each configured provider; both are set in combined `oauth+api-key` mode. */
   providers: { apiKey?: ApiKeyCallerProvider; oauth?: OAuthCallerProvider };
+  /** The file-uploads extension's state, when it is enabled. */
+  files?: FilesRuntime;
 };
 
 /**
@@ -220,6 +224,9 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const metadataPath = resource ? `/.well-known/oauth-protected-resource${resource.pathname === "/" ? "" : resource.pathname}` : undefined;
   const metadataUrl = resource ? `${resource.origin}${metadataPath}` : "";
   const shutdown = new AbortController();
+  // The file-uploads extension issues targets at the public MCP URL; config.files is set only when that is https.
+  const files = config.files && downloadBaseUrl(config) ? new FilesRuntime(config.files, downloadBaseUrl(config)!, safeLog) : undefined;
+  const serveMcp = (fetch: () => Promise<Response>) => files ? files.serve(fetch) : fetch();
   // Presigned links need the public URL to build them; they carry their own authorization.
   const links = downloadBaseUrl(config) ? new PresignedLinks(downloadBaseUrl(config)!, config.http.stateSecret) : undefined;
   const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => createMcpHandler(({ authInfo }) =>
@@ -227,6 +234,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       ...(authInfo ? { address: address(authInfo) } : {}),
       ...(typeof authInfo?.extra?.owner === "string" ? { owner: authInfo.extra.owner } : {}),
       shutdown: shutdown.signal,
+      ...(files ? { files } : {}),
       ...(links ? { links } : {}),
     }),
     { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
@@ -247,7 +255,9 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     req.once("aborted", abort);
     res.once("close", abort);
     const url = new URL(req.url ?? "/", "http://localhost");
-    const isUpload = url.pathname.startsWith(`${UPLOAD_PATH}/`);
+    // Draft upload URLs and file-uploads extension targets both stream a request body into a draft.
+    const isTarget = Boolean(files) && url.pathname.startsWith(`${TARGET_PATH}/`);
+    const isUpload = url.pathname.startsWith(`${UPLOAD_PATH}/`) || isTarget;
     const isLink = Boolean(links) && url.pathname.startsWith(`${LINK_PATH}/`);
     const streamsBody = isUpload || (isLink && req.method === "PUT");
     // A progressing upload may take longer than any fixed budget; the upload stream has an idle timeout instead.
@@ -319,8 +329,19 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
         catch { return sendWebResponse(res, new Response("invalid attachment download path", { status: 400 })); }
       }
       if (isLink) return serveLink(links!, url, request, res, controller.signal);
+      let target: { token: string; encoding?: string } | undefined;
+      if (isTarget) {
+        const refusal = (error: string, status: number, headers: Record<string, string> = {}) => sendWebResponse(res, Response.json({ error }, { status, headers }));
+        if (req.method !== "PUT") return refusal("use PUT to upload to an upload target", 405, { allow: "PUT, OPTIONS" });
+        if (url.search) return refusal("upload target URLs must not contain query parameters", 400);
+        const token = targetToken(url.pathname);
+        if (!token) return refusal("unknown upload target", 404);
+        target = { token };
+        try { target.encoding = uploadEncoding(request.headers.get("content-encoding")); }
+        catch (error) { return refusal((error as Error).message, 415); }
+      }
       let upload: (ReturnType<typeof parseUploadPath> & { encoding?: string; contentType: string; sha256?: string }) | undefined;
-      if (isUpload) {
+      if (isUpload && !isTarget) {
         // Refusals are JSON, like the errors from the upload itself.
         const uploadRefusal = (error: string, status: number, headers: Record<string, string> = {}) =>
           sendWebResponse(res, Response.json({ error }, { status, headers }));
@@ -367,6 +388,16 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
         }
         return sendWebResponse(res, Response.json({ id: upload!.id, ...uploaded, type: upload!.contentType }, { status: 201 }));
       });
+      const serveTarget = (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo) => serveTransfer(provider, auth, WRITE_SCOPE, async (caller) => {
+        let response: Response;
+        try { response = await receiveUpload(files!, caller, target!.token, request, target!.encoding, controller.signal); }
+        catch (error) {
+          // The client was still sending when the upload failed and went idle: close rather than leave it hanging.
+          if ((error as { undrained?: boolean }).undrained) { res.destroy(); return; }
+          throw error;
+        }
+        return sendWebResponse(res, response);
+      });
       const serveTransfer = async (provider: ApiKeyCallerProvider | OAuthCallerProvider, auth: AuthInfo, scope: string, transfer: (caller: Caller) => Promise<void>) => {
         let caller: Caller | undefined;
         try {
@@ -406,10 +437,11 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
             catch { return sendWebResponse(res, new Response("invalid JSON request", { status: 400 })); }
             if (Array.isArray(parsedBody)) return sendWebResponse(res, new Response("MCP batch requests are not supported", { status: 400 }));
           }
-          const scopes = download ? [READ_SCOPE] : upload ? [WRITE_SCOPE] : requestScopes(parsedBody);
+          const scopes = download ? [READ_SCOPE] : upload || target ? [WRITE_SCOPE] : requestScopes(parsedBody);
           if (scopes.some(scope => !authenticated.scopes.includes(scope))) throw insufficientScope(scopes);
           if (download) return await serveDownload(oauthProvider, authenticated);
           if (upload) return await serveUpload(oauthProvider, authenticated);
+          if (target) return await serveTarget(oauthProvider, authenticated);
           // Discover/list operations only need the incoming JWT. Resolve an
           // exchanged credential before starting any protected tool response.
           if (scopes.length) {
@@ -418,7 +450,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
           }
           const state: OAuthRequestState = { scopes };
           return await oauthRequestState.run(state, async () => {
-            const response = await oauthHandler.fetch(request, { authInfo: authenticated, parsedBody });
+            const response = await serveMcp(() => oauthHandler.fetch(request, { authInfo: authenticated, parsedBody }));
             await sendWebResponse(res, response, () => state.error ? oauthErrorResponse(state.error, metadataUrl) : undefined);
           });
         } catch (error) {
@@ -444,7 +476,8 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (auth instanceof Response) return sendWebResponse(res, auth);
       if (download) return serveDownload(apiKeyProvider, auth);
       if (upload) return serveUpload(apiKeyProvider, auth);
-      return sendWebResponse(res, await apiKeyHandler.fetch(request, { authInfo: auth }));
+      if (target) return serveTarget(apiKeyProvider, auth);
+      return sendWebResponse(res, await serveMcp(() => apiKeyHandler.fetch(request, { authInfo: auth })));
     })().catch((error) => {
       safeLog(`request failed: ${error instanceof Error ? error.message : String(error)}`);
       if (res.destroyed) return;
@@ -483,6 +516,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     }
     oauthProvider?.close();
     apiKeyProvider?.close();
+    files?.close();
     links?.close();
     await Promise.all([oauthHandler?.close(), apiKeyHandler?.close()]);
     // Aborted fetches may open replacement sockets without a request, so
@@ -490,5 +524,5 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
     server.closeAllConnections();
     await closed;
   })();
-  return { server, close, provider: (oauthProvider ?? apiKeyProvider)!, providers: { apiKey: apiKeyProvider, oauth: oauthProvider } };
+  return { server, close, provider: (oauthProvider ?? apiKeyProvider)!, providers: { apiKey: apiKeyProvider, oauth: oauthProvider }, ...(files ? { files } : {}) };
 }

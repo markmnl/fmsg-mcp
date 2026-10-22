@@ -49,6 +49,7 @@
     "docs/http-deployment.md",
     "docs/token-providers.md",
     "docs/oauth.md",
+    "docs/files-extension-notes.md",
     "LICENSE",
     "server.json"
   ],

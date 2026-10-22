@@ -9,7 +9,19 @@
   attachment changed since the link was issued is refused or cut off before its last bytes. `FMSG_MCP_STATE_SECRET` (at least 32 bytes)
   sets the signing key.
 - `data_base64` is described as best effort, because the base64 passes through the model: fine for small
-  files (verified exact up to 16 KB), always with `sha256`, and `path` or a presigned link for anything larger.
+  files (verified exact up to 16 KB), always with `sha256`, and `path`, a presigned link or the file-uploads
+  extension for anything larger.
+
+- Reference implementation of the experimental MCP file-uploads extension (`io.modelcontextprotocol/files`,
+  draft at experimental-ext-file-uploads `6101d34`), over HTTP with an https public MCP URL. `send_message`,
+  `reply` and `create_draft` accept FileInputs next to their classic attachments, inline or uploaded out of band.
+  Out-of-band files get one single-use, short-lived upload target each (`PUT /mcp/uploads/{token}`, the
+  connection's credential, bound to the declared size and SHA-256), streamed into the call's draft. The retry
+  confirms every file before the message is sent. New settings: `FMSG_MCP_FILES_EXTENSION`,
+  `FMSG_MCP_FILES_MAX_INLINE_BYTES`, `FMSG_MCP_FILES_MAX_FILE_BYTES` and `FMSG_MCP_FILES_TARGET_TTL_SECONDS`;
+  `FMSG_MCP_STATE_SECRET` also keys requestState and targets. `docs/files-extension-notes.md` lists where the draft is open, the choices made and
+  suggested fixes. Clients without the extension see no change.
+
 - A recipient added to a message after it was sent can reply to it. The Web API takes such a reply only
   through the hash of the add-to batch that added them; `reply`, `create_draft` (and so `send_draft`) now
   send it as the parent, where before the host refused with "not a participant of this parent". A reply

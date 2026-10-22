@@ -4,7 +4,8 @@ import { toolError } from "../errors.js";
 import { withOwner } from "../owner.js";
 import { addressList, headerValue, isoTime } from "../render.js";
 import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../upload.js";
-import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, prepareAttachments } from "./attachments.js";
+import { base64Hint, draftWithAttachments, fileRoutes } from "./attachments.js";
+import { attachmentsArgument, fileCall, prepareCall, resumed, typedAttachments } from "../files/tools.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { type ParentReference, parentReference, replyParent } from "./parent.js";
 import { rootTopic } from "./read.js";
@@ -13,10 +14,47 @@ import {
   sendWarnings, sentAttachments, sentOutput, withHint,
 } from "./send.js";
 
+type Resolved = Array<{ input: string; address: string }>;
+/** What create_draft needs after its uploads to build the same result as a call without them. */
+type DraftSummary = { to: string[]; resolved: Resolved; pid?: string; hint?: string; redactions?: number; redacted?: string[]; types?: Record<string, string> };
+type Drafted = { id: string; topic: string; attachments: Array<{ filename: string; size: number }>; redactions: number; redacted: string[] };
+
 export const registerDraftTools: Register = (server, deps) => {
   const baseUrl = downloadBaseUrl(deps.config);
   const routes = fileRoutes(deps.config, Boolean(deps.links));
   const includeOwner = deps.includeOwner ? { include_owner: deps.includeOwner } : {};
+
+  /** create_draft's result. */
+  const draftResult = (draft: Drafted, recipients: string[], resolved: Resolved, pid: string | undefined, types: Record<string, string>, hint: string | undefined) => {
+    const upload = baseUrl ? {
+      url_template: draftUploadUrlTemplate(baseUrl, draft.id),
+      method: "PUT",
+      authentication: "bearer",
+      checksum_header: CHECKSUM_HEADER,
+      accepts_encoding: [...UPLOAD_ENCODINGS],
+    } : undefined;
+    const next = (upload ? `Upload files with PUT to ${upload.url_template} using this MCP connection's Authorization header, then call send_draft. ` : "Call send_draft to send it. ") +
+      "Call delete_draft to discard it.";
+    const structured = {
+      draft_id: draft.id,
+      to: recipients,
+      topic: draft.topic,
+      parent_id: pid ?? null,
+      attachments: typedAttachments(draft.attachments, types),
+      redactions: draft.redactions,
+      redacted: draft.redacted,
+      ...(resolved.length ? { resolved } : {}),
+      warnings: sendWarnings(draft.redactions, draft.redacted, resolved),
+      ...(upload ? { upload } : {}),
+      next,
+      ...(hint ? { hint } : {}),
+    };
+    const what = pid ? `reply to message ${pid}` : `"${headerValue(draft.topic)}"`;
+    const text = `Created draft ${draft.id} (${what}) for ${addressList(recipients)}; not sent` +
+      (structured.attachments.length ? `, with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
+      redactionNote(draft.redactions, draft.redacted) + resolvedNote(resolved) + `\n\n${next}`;
+    return ok(withHint(text, hint), structured);
+  };
 
   server.registerTool(
     "create_draft",
@@ -37,7 +75,7 @@ export const registerDraftTools: Register = (server, deps) => {
         no_reply: z.boolean().default(false).describe(NO_REPLY),
         allow_no_reply: z.boolean().default(false).describe("draft a reply even though the parent asked for no replies"),
         ...includeOwner,
-        attachments: z.array(attachmentInput(deps.config)).optional().describe("files to attach now"),
+        attachments: attachmentsArgument(deps, "files to attach now"),
       }),
       outputSchema: outputObject({
         draft_id: z.string(),
@@ -61,12 +99,22 @@ export const registerDraftTools: Register = (server, deps) => {
       }),
       annotations: { ...SENDS, destructiveHint: false },
     },
-    async ({ to, topic, reply_to, body, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) => {
+    async (args, ctx) => {
+      const { to, topic, reply_to, body, type, important, no_reply, allow_no_reply, include_owner, attachments } = args;
       if (reply_to && topic) return toolError("a reply has no topic: pass topic only for a new message");
       if (!reply_to && !to?.length) return toolError("pass to: the recipients (or reply_to to draft a reply)");
       return withCaller(deps, ctx, async (caller, signal) => {
+        const files = fileCall(deps, ctx, caller, signal, "create_draft", args);
+        const resume = resumed(files, async (draft, data) => {
+          const summary = data as DraftSummary;
+          return draftResult({
+            id: draft.id, topic: draft.pid ? "" : (draft.topic ?? ""), attachments: draft.attachments ?? [],
+            redactions: summary.redactions ?? 0, redacted: summary.redacted ?? [],
+          }, summary.to, summary.resolved, summary.pid, summary.types ?? {}, summary.hint);
+        });
+        if (resume) return resume;
         let recipients: string[];
-        let resolved: Array<{ input: string; address: string }>;
+        let resolved: Resolved;
         let parentRef: ParentReference | undefined;
         if (reply_to) {
           const parent = await replyParent(caller, reply_to, signal);
@@ -79,40 +127,16 @@ export const registerDraftTools: Register = (server, deps) => {
           ({ to: recipients, resolved } = resolveRecipients(to!, resolverFor(deps, caller)));
         }
         recipients = withOwner(caller, recipients, include_owner);
-        const outbound = await prepareAttachments(attachments, deps.config);
-        const hint = base64Hint(attachments, routes);
-        const draft = await draftWithAttachments(caller.client, {
-          to: recipients, body, type, important, noReply: no_reply, ...(parentRef ?? { topic: topic ?? "" }),
-        }, outbound, signal);
+        const call = await prepareCall(deps, files, attachments);
+        if ("content" in call) return call;
+        const hint = base64Hint(call.classic, routes);
+        const input = { to: recipients, body, type, important, noReply: no_reply, ...(parentRef ?? { topic: topic ?? "" }) };
         const pid = parentRef?.pid;
-        const upload = baseUrl ? {
-          url_template: draftUploadUrlTemplate(baseUrl, draft.id),
-          method: "PUT",
-          authentication: "bearer",
-          checksum_header: CHECKSUM_HEADER,
-          accepts_encoding: [...UPLOAD_ENCODINGS],
-        } : undefined;
-        const next = (upload ? `Upload files with PUT to ${upload.url_template} using this MCP connection's Authorization header, then call send_draft. ` : "Call send_draft to send it. ") +
-          "Call delete_draft to discard it.";
-        const structured = {
-          draft_id: draft.id,
-          to: recipients,
-          topic: draft.topic,
-          parent_id: pid ?? null,
-          attachments: sentAttachments(draft.attachments, outbound),
-          redactions: draft.redactions,
-          redacted: draft.redacted,
-          ...(resolved.length ? { resolved } : {}),
-          warnings: sendWarnings(draft.redactions, draft.redacted, resolved),
-          ...(upload ? { upload } : {}),
-          next,
-          ...(hint ? { hint } : {}),
-        };
-        const what = pid ? `reply to message ${pid}` : `"${headerValue(draft.topic)}"`;
-        const text = `Created draft ${draft.id} (${what}) for ${addressList(recipients)}; not sent` +
-          (structured.attachments.length ? `, with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
-          redactionNote(draft.redactions, draft.redacted) + resolvedNote(resolved) + `\n\n${next}`;
-        return ok(withHint(text, hint), structured);
+        if (call.kind === "uploads") {
+          return call.start(input, { to: recipients, resolved, ...(pid ? { pid } : {}), ...(hint ? { hint } : {}) } satisfies DraftSummary);
+        }
+        const draft = await draftWithAttachments(caller.client, input, call.prepared, signal);
+        return draftResult(draft, recipients, resolved, pid, call.types, hint);
       });
     },
   );

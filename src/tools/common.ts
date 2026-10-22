@@ -1,8 +1,9 @@
-import type { CallToolResult, McpServer, ServerContext, ToolAnnotations } from "@modelcontextprotocol/server";
+import type { CallToolResult, InputRequiredResult, McpServer, ServerContext, ToolAnnotations } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import type { AddressResolver } from "../address.js";
 import type { FmsgMessage, RecipientDelivery } from "../client/types.js";
 import type { Config } from "../config.js";
+import type { FilesRuntime } from "../files/runtime.js";
 import type { PresignedLinks } from "../links.js";
 import { type Caller, type CallerProvider, callerFor } from "../context.js";
 import { toolError } from "../errors.js";
@@ -17,6 +18,8 @@ export type ToolDeps = {
   includeOwner?: z.ZodDefault<z.ZodBoolean>;
   /** Aborted when the server begins shutting down; long waits then return early. */
   shutdown?: AbortSignal;
+  /** The file-uploads extension, when this server offers it. */
+  files?: FilesRuntime;
   /** Presigned links, when this server has a public URL. */
   links?: PresignedLinks;
 };
@@ -158,12 +161,15 @@ export function resolverFor(deps: ToolDeps, caller: Caller): AddressResolver {
   return { ...deps.config, callerAddress: caller.address };
 }
 
+/** What a tool may answer: a result, or (file uploads) a request for more input before it runs. */
+export type ToolResult = CallToolResult | InputRequiredResult;
+
 /** Resolve the caller and run a tool body, turning any failure into an `isError` result. */
 export async function withCaller(
   deps: ToolDeps,
   ctx: ServerContext,
-  body: (caller: Caller, signal: AbortSignal) => Promise<CallToolResult>,
-): Promise<CallToolResult> {
+  body: (caller: Caller, signal: AbortSignal) => Promise<ToolResult>,
+): Promise<ToolResult> {
   let caller: Caller;
   try {
     caller = await callerFor(deps.provider, ctx);
