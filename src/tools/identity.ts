@@ -4,7 +4,7 @@ import { addressText, isoTime } from "../render.js";
 import { READ_ONLY, type Register, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { toolError } from "../errors.js";
 import type { Transport } from "../config.js";
-import { VERSION } from "../version.js";
+import { BUILD, VERSION, VERSION_LABEL } from "../version.js";
 
 /** Structured output keeps the transport ids published since 0.2.5; only the text uses the friendlier label. */
 const TRANSPORT_LABELS: Record<Transport, string> = { stdio: "stdio", http: "Streamable HTTP" };
@@ -16,7 +16,7 @@ export const registerIdentityTools: Register = (server, deps) => {
       title: "Show fmsg identity",
       description:
         "Report the fmsg address this server acts as, its owner if it is a sub-address, the fmsg Web API URL and how " +
-        "short names resolve; the text also gives the server version. Call this first if unsure who you are sending as.",
+        "short names resolve, and this server's version and build. Call this first if unsure who you are sending as.",
       outputSchema: outputObject({
         address: z.string(),
         owner: z.string().optional().describe("owner of this sub-address, included as a recipient of messages you send unless include_owner is false; absent for an owner's own address"),
@@ -27,6 +27,9 @@ export const registerIdentityTools: Register = (server, deps) => {
         transport: openEnum(["stdio", "http"], "http is Streamable HTTP"),
         default_domain: z.string().nullable(),
         directory_names: z.array(z.string()).describe("short names in the operator-configured directory; empty when there are none"),
+        server_version: z.string().optional().describe("this fmsg-mcp server's release version"),
+        server_commit: z.string().optional().describe("the git commit this server was built from, when the build recorded it"),
+        server_build: z.string().optional().describe("git describe of the build, such as v1.2.3-4-g80e0418, when recorded"),
       }),
       annotations: { ...READ_ONLY, openWorldHint: false },
     },
@@ -44,12 +47,15 @@ export const registerIdentityTools: Register = (server, deps) => {
           transport: deps.config.transport,
           default_domain: defaultDomain ?? null,
           directory_names: directoryNames,
+          server_version: VERSION,
+          ...(BUILD.commit ? { server_commit: BUILD.commit } : {}),
+          ...(BUILD.describe ? { server_build: BUILD.describe } : {}),
         };
         const lines = [
           deps.config.apiPublicUrl
             ? `You are ${addressText(caller.address)} on ${deps.config.apiPublicUrl}, connected over ${transport}.`
             : `You are ${addressText(caller.address)}, connected over ${transport}.`,
-          `Access is renewed automatically. Server version ${VERSION}.`,
+          `Access is renewed automatically. Server version ${VERSION_LABEL}.`,
         ];
         if (caller.owner) lines.push(`Sub-address of ${addressText(caller.owner)}, who is a recipient of messages you send unless include_owner is false.`);
         if (defaultDomain) lines.push(`Short names resolve to @name@${defaultDomain}.`);

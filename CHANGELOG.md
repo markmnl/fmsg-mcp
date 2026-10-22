@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A recipient added to a message after it was sent can reply to it. The Web API takes such a reply only
+  through the hash of the add-to batch that added them; `reply`, `create_draft` (and so `send_draft`) now
+  send it as the parent, where before the host refused with "not a participant of this parent". A reply
+  from an added recipient to an earlier message in the thread, which they cannot reply to, is refused with
+  an error naming the message they were added to.
+- `whoami` reports the server version in its structured result (`server_version`, plus `server_commit` and
+  `server_build` when recorded), not only in its text, which hosts that show models only the structured
+  result never passed on. `/healthz` adds the commit. `npm run build` records the version and commit from
+  git; the Docker image takes them as build arguments. Builds from source no longer report the stale
+  `package.json` version 0.1.4: it now matches the last release, and a release tag takes precedence.
+
 - Over OAuth, the owner comes from the `owner` claim the IdP puts on the app's access token
   (and on the exchanged Web API token), so agents that sign in (ChatGPT connectors) include
   their owner like API-key callers do. 1.2.0 only read the API-key token's claim, so a

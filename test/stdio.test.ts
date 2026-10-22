@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
@@ -51,7 +51,12 @@ describe.skipIf(!existsSync(entry))("stdio binary", () => {
     const { tools } = await client.listTools();
     expect(tools.length).toBe(17);
     expect(client.getInstructions()).toContain(`you are acting as ${ALICE}`);
-    expect(structured<{ address: string }>(await call(client, "whoami")).address).toBe(ALICE);
+    const who = structured<{ address: string; server_version: string; server_commit?: string }>(await call(client, "whoami"));
+    expect(who.address).toBe(ALICE);
+    // The built binary reports the build `npm run build` recorded.
+    const build = JSON.parse(readFileSync(path.resolve("dist/build-info.json"), "utf8")) as { version?: string; commit?: string };
+    expect(who.server_version).toBe(build.version ?? JSON.parse(readFileSync("package.json", "utf8")).version);
+    if (build.commit) expect(who.server_commit).toBe(build.commit);
     fake.seed({ from: BOB, to: [ALICE], topic: "stdio", data: "over stdio" });
     expect(structured<{ count: number }>(await call(client, "list_messages")).count).toBe(1);
   });

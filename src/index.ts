@@ -8,7 +8,7 @@ import { loadConfig, DEFAULT_HTTP_PORT, type ConfigOverrides } from "./config.js
 import { type CallerProvider, StaticCallerProvider, UnconfiguredCallerProvider } from "./context.js";
 import { createHttpServer, MCP_PATH, SHUTDOWN_GRACE_MS } from "./http.js";
 import { createFmsgMcpServer } from "./server.js";
-import { PACKAGE_NAME, VERSION } from "./version.js";
+import { PACKAGE_NAME, VERSION, VERSION_LABEL } from "./version.js";
 
 const USAGE = `${PACKAGE_NAME} ${VERSION} — MCP server for fmsg
 
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
       provider = new UnconfiguredCallerProvider(configurationError);
     } else if (cfg.apiUrl && cfg.apiKey) {
       provider = new StaticCallerProvider(new FmsgClient(cfg.apiUrl, cfg.apiKey, { allowInsecureHttp: cfg.allowInsecureHttp }));
-      console.error(safeErrorMessage(`fmsg-mcp ${VERSION} serving stdio for ${cfg.apiUrl}`));
+      console.error(safeErrorMessage(`fmsg-mcp ${VERSION_LABEL} serving stdio for ${cfg.apiUrl}`));
     } else {
       const missing = [!cfg.apiUrl && "FMSG_API_URL", !cfg.apiKey && "FMSG_API_KEY"].filter(Boolean).join(" and ");
       const reason = `fmsg-mcp is not configured: set ${missing} (the fmsg Web API base URL and an fmsgk_... API key for the address this server sends as)`;
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
   });
   const addr = server.address();
   const shown = typeof addr === "object" && addr ? `${addr.address}:${addr.port}` : `${config.http.host}:${config.http.port}`;
-  console.error(safeErrorMessage(`fmsg-mcp ${VERSION} serving Streamable HTTP at http://${shown}${MCP_PATH} for ${config.apiUrl}`));
+  console.error(safeErrorMessage(`fmsg-mcp ${VERSION_LABEL} serving Streamable HTTP at http://${shown}${MCP_PATH} for ${config.apiUrl}`));
   onShutdown(() => close());
 }
 

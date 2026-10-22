@@ -21,7 +21,7 @@ import { sameAddress } from "./address.js";
 import { attachmentType } from "./render.js";
 import { describeError } from "./errors.js";
 import type { Caller, CallerProvider } from "./context.js";
-import { VERSION } from "./version.js";
+import { BUILD, VERSION } from "./version.js";
 import { safeErrorMessage } from "./client/redact.js";
 import { isLoopbackHost, normalizeOrigin } from "./client/url.js";
 
@@ -181,7 +181,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       const isDownload = url.pathname.startsWith(`${DOWNLOAD_PATH}/`);
       if (url.pathname === "/healthz") {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, name: "fmsg-mcp", version: VERSION }));
+        res.end(JSON.stringify({ ok: true, name: "fmsg-mcp", version: VERSION, ...(BUILD.commit ? { commit: BUILD.commit } : {}) }));
         return;
       }
       if (resource && (url.pathname === metadataPath || url.pathname === "/.well-known/oauth-protected-resource")) {
