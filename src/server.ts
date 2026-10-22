@@ -16,6 +16,8 @@ import { registerWaitTools } from "./tools/wait.js";
 import { registerSaveTool } from "./tools/save.js";
 import { registerDownloadTool } from "./tools/download.js";
 import { VERSION } from "./version.js";
+import { FILES_EXTENSION, advertisedSettings } from "./files/extension.js";
+import type { FilesRuntime } from "./files/runtime.js";
 import type { PresignedLinks } from "./links.js";
 
 export const SERVER_NAME = "fmsg";
@@ -27,6 +29,8 @@ export type CreateServerOptions = {
   owner?: string;
   /** Aborted when the process begins shutting down, so wait_for_message returns "interrupted". */
   shutdown?: AbortSignal;
+  /** The file-uploads extension's shared state; the extension is advertised and its FileInputs accepted only with it. */
+  files?: FilesRuntime;
   /** Issues presigned download and upload links (HTTP with a public URL). */
   links?: PresignedLinks;
 };
@@ -42,10 +46,18 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
     ...(config.defaultDomain ? { defaultDomain: config.defaultDomain } : {}),
     files: fileRoutes(config, Boolean(options.links)),
   });
-  const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
+  const files = options.files;
+  const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, {
+    instructions,
+    ...(files ? {
+      capabilities: { extensions: { [FILES_EXTENSION]: advertisedSettings(files.config) } },
+      // requestState is verified (MAC, expiry, principal) before a tool sees it; a failure answers -32602.
+      requestState: { verify: files.codec.verify },
+    } : {}),
+  });
   const includeOwner = includeOwnerSchema(options.address, options.owner);
   const deps: ToolDeps = {
-    provider, config, ...(includeOwner ? { includeOwner } : {}), ...(options.shutdown ? { shutdown: options.shutdown } : {}),
+    provider, config, ...(includeOwner ? { includeOwner } : {}), ...(options.shutdown ? { shutdown: options.shutdown } : {}), ...(files ? { files } : {}),
     ...(options.links ? { links: options.links } : {}),
   };
   registerIdentityTools(server, deps);

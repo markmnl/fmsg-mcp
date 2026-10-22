@@ -7,7 +7,8 @@ import type { Caller } from "../context.js";
 import { toolError } from "../errors.js";
 import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
-import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
+import { type FileRoutes, type PreparedAttachment, base64Hint, fileRoutes, sendWithAttachments } from "./attachments.js";
+import { attachmentsArgument, fileCall, prepareCall, resumed, typedAttachments } from "../files/tools.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { parentReference, replyParent } from "./parent.js";
 import { rootTopic } from "./read.js";
@@ -124,9 +125,69 @@ export function resolvedNote(resolved: Array<{ input: string; address: string }>
   return resolved.length ? ` Short names resolved: ${resolved.map((r) => `${r.input} → ${addressText(r.address)}`).join(", ")}.` : "";
 }
 
+/** What a send-type tool needs after its uploads to build the same result as a call without them. */
+type SendSummary = { to: string[]; resolved: Resolved; hint?: string; parent?: string; redactions?: number; redacted?: string[]; types?: Record<string, string> };
+type Resolved = Array<{ input: string; address: string }>;
+type Sent = { id: string; time: number | null; topic: string; attachments: Array<{ filename: string; size: number }>; redactions: number; redacted: string[] };
+
+/** send_message's result. */
+function newMessageResult(caller: Caller, to: string[], resolved: Resolved, sent: Sent, types: Record<string, string>, hint: string | undefined): CallToolResult {
+  const structured = {
+    id: sent.id,
+    time: isoTime(sent.time),
+    from: caller.address,
+    to,
+    topic: sent.topic,
+    parent_id: null,
+    attachments: typedAttachments(sent.attachments, types),
+    redactions: sent.redactions,
+    redacted: sent.redacted,
+    ...(resolved.length ? { resolved } : {}),
+    warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
+    thread_topic: sent.topic,
+    ...(hint ? { hint } : {}),
+  };
+  const text = `Sent message ${sent.id} "${sent.topic}" to ${addressList(to)} at ${structured.time ?? "?"}` +
+    (structured.attachments.length ? ` with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
+    redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
+  return ok(withHint(text, hint), structured);
+}
+
+/** reply's result; `parent` is the message replied to. */
+async function replyResult(
+  caller: Caller, parent: FmsgMessage, to: string[], resolved: Resolved, sent: Sent, types: Record<string, string>, hint: string | undefined, signal: AbortSignal,
+): Promise<CallToolResult> {
+  const structured = {
+    id: sent.id,
+    time: isoTime(sent.time),
+    from: caller.address,
+    to,
+    topic: "",
+    parent_id: parent.id,
+    attachments: typedAttachments(sent.attachments, types),
+    redactions: sent.redactions,
+    redacted: sent.redacted,
+    ...(resolved.length ? { resolved } : {}),
+    warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
+    // The reply is already sent: a failed topic lookup only leaves the topic unknown.
+    thread_topic: await rootTopic(caller.client, parent, signal).catch(() => null),
+    ...(hint ? { hint } : {}),
+  };
+  const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
+  const text = `Sent reply ${sent.id} to message ${parent.id}${topic} for ${addressList(to)} at ${structured.time ?? "?"}` +
+    redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
+  return ok(withHint(text, hint), structured);
+}
+
+/** Send a draft whose files all arrived, as `Sent`. */
+export async function sendStaged(caller: Caller, draft: FmsgMessage, summary: SendSummary, signal: AbortSignal): Promise<Sent> {
+  const sent = await caller.client.sendDraft(draft.id, signal);
+  return { id: sent.id, time: sent.time, topic: draft.pid ? "" : (draft.topic ?? ""), attachments: draft.attachments ?? [], redactions: summary.redactions ?? 0, redacted: summary.redacted ?? [] };
+}
+
 export const registerSendTools: Register = (server, deps) => {
+  const attachments = attachmentsArgument(deps, "files");
   const routes = fileRoutes(deps.config, Boolean(deps.links));
-  const attachments = z.array(attachmentInput(deps.config, routes)).optional().describe("files");
   const guidance = attachmentGuidance(deps.config, routes);
   const includeOwner = deps.includeOwner ? { include_owner: deps.includeOwner } : {};
   server.registerTool(
@@ -151,32 +212,24 @@ export const registerSendTools: Register = (server, deps) => {
       outputSchema: sentOutput,
       annotations: SENDS,
     },
-    async ({ to, topic, body, type, important, no_reply, include_owner, attachments }, ctx) =>
+    async (args, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
+        const { to, topic, body, type, important, no_reply, include_owner, attachments } = args;
+        const files = fileCall(deps, ctx, caller, signal, "send_message", args);
+        const resume = resumed(files, async (draft, data, s) => {
+          const summary = data as SendSummary;
+          return newMessageResult(caller, summary.to, summary.resolved, await sendStaged(caller, draft, summary, s), summary.types ?? {}, summary.hint);
+        });
+        if (resume) return resume;
         const { to: resolvedTo, resolved } = resolveRecipients(to, resolverFor(deps, caller));
         const recipients = withOwner(caller, resolvedTo, include_owner);
-        const outbound = await prepareAttachments(attachments, deps.config);
-        const hint = base64Hint(attachments, routes);
-        const sent = await sendWithAttachments(caller.client, { to: recipients, topic, body, type, important, noReply: no_reply }, outbound, signal);
-        const structured = {
-          id: sent.id,
-          time: isoTime(sent.time),
-          from: caller.address,
-          to: recipients,
-          topic: sent.topic,
-          parent_id: null,
-          attachments: sentAttachments(sent.attachments, outbound),
-          redactions: sent.redactions,
-          redacted: sent.redacted,
-          ...(resolved.length ? { resolved } : {}),
-          warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
-          thread_topic: sent.topic,
-          ...(hint ? { hint } : {}),
-        };
-        const text = `Sent message ${sent.id} "${sent.topic}" to ${addressList(recipients)} at ${structured.time ?? "?"}` +
-          (structured.attachments.length ? ` with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
-          redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
-        return ok(withHint(text, hint), structured);
+        const call = await prepareCall(deps, files, attachments);
+        if ("content" in call) return call;
+        const hint = base64Hint(call.classic, routes);
+        const input = { to: recipients, topic, body, type, important, noReply: no_reply };
+        if (call.kind === "uploads") return call.start(input, { to: recipients, resolved, ...(hint ? { hint } : {}) } satisfies SendSummary);
+        const sent = await sendWithAttachments(caller.client, input, call.prepared, signal);
+        return newMessageResult(caller, recipients, resolved, sent, call.types, hint);
       }),
   );
 
@@ -204,37 +257,29 @@ export const registerSendTools: Register = (server, deps) => {
       outputSchema: sentOutput,
       annotations: SENDS,
     },
-    async ({ id, body, recipients, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) =>
+    async (args, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
+        const { id, body, recipients, type, important, no_reply, allow_no_reply, include_owner, attachments } = args;
+        const files = fileCall(deps, ctx, caller, signal, "reply", args);
+        const resume = resumed(files, async (draft, data, s) => {
+          const summary = data as SendSummary;
+          const parent = await caller.client.getMessage(summary.parent!, s);
+          return replyResult(caller, parent, summary.to, summary.resolved, await sendStaged(caller, draft, summary, s), summary.types ?? {}, summary.hint, s);
+        });
+        if (resume) return resume;
         const parent = await replyParent(caller, id, signal);
         if ("content" in parent) return parent;
         const target = replyRecipients(deps, caller, parent, recipients, allow_no_reply);
         if ("content" in target) return target;
         const { resolved } = target;
         const to = withOwner(caller, target.to, include_owner);
-        const outbound = await prepareAttachments(attachments, deps.config);
-        const hint = base64Hint(attachments, routes);
-        const sent = await sendWithAttachments(caller.client, { to, ...parentReference(caller, parent), body, type, important, noReply: no_reply }, outbound, signal);
-        const structured = {
-          id: sent.id,
-          time: isoTime(sent.time),
-          from: caller.address,
-          to,
-          topic: "",
-          parent_id: parent.id,
-          attachments: sentAttachments(sent.attachments, outbound),
-          redactions: sent.redactions,
-          redacted: sent.redacted,
-          ...(resolved.length ? { resolved } : {}),
-          warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
-          // The reply is already sent: a failed topic lookup only leaves the topic unknown.
-          thread_topic: await rootTopic(caller.client, parent, signal).catch(() => null),
-          ...(hint ? { hint } : {}),
-        };
-        const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
-        const text = `Sent reply ${sent.id} to message ${parent.id}${topic} for ${addressList(to)} at ${structured.time ?? "?"}` +
-          redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
-        return ok(withHint(text, hint), structured);
+        const call = await prepareCall(deps, files, attachments);
+        if ("content" in call) return call;
+        const hint = base64Hint(call.classic, routes);
+        const input = { to, ...parentReference(caller, parent), body, type, important, noReply: no_reply };
+        if (call.kind === "uploads") return call.start(input, { to, resolved, parent: parent.id, ...(hint ? { hint } : {}) } satisfies SendSummary);
+        const sent = await sendWithAttachments(caller.client, input, call.prepared, signal);
+        return replyResult(caller, parent, to, resolved, sent, call.types, hint, signal);
       }),
   );
 

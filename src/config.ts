@@ -23,6 +23,21 @@ export type HttpConfig = {
   stateSecret?: string;
 };
 
+/** The MCP file-uploads extension (io.modelcontextprotocol/files); HTTP only, with an https public MCP URL. */
+export type FilesConfig = {
+  /** Largest total decoded size of inline `data` in one call (advertised as maxInlineBytes). */
+  maxInlineBytes: number;
+  /** Operator limit on each file's size (advertised as x-mcp-file maxSize); none when unset. */
+  maxFileBytes?: number;
+  /** How long upload targets stay usable. */
+  targetTtlSeconds: number;
+  /**
+   * HMAC key for requestState and upload targets, so any instance can serve a retry. Without it each process
+   * makes its own, and only the process that issued the targets can complete the call.
+   */
+  stateSecret?: string;
+};
+
 export type Config = {
   transport: Transport;
   apiUrl: string;
@@ -46,6 +61,8 @@ export type Config = {
   /** Hard cap on a single wait_for_message call. */
   waitMaxSeconds: number;
   http: HttpConfig;
+  /** Present when the file-uploads extension is enabled. */
+  files?: FilesConfig;
   oauth?: OAuthConfig;
 };
 
@@ -106,12 +123,30 @@ function resolveApiPublicUrl(
   return apiUrl;
 }
 
+/**
+ * The file-uploads extension needs upload targets clients may use: absolute https URLs at the public MCP URL's
+ * origin. So it is on over HTTP with an https public URL, unless FMSG_MCP_FILES_EXTENSION=off.
+ */
 /** FMSG_MCP_STATE_SECRET, checked; HTTP only. */
 function stateSecret(env: NodeJS.ProcessEnv, transport: Transport): string | undefined {
   const secret = env.FMSG_MCP_STATE_SECRET?.trim();
   if (transport !== "http" || !secret) return undefined;
   if (Buffer.byteLength(secret) < 32) throw new Error("FMSG_MCP_STATE_SECRET must be at least 32 bytes");
   return secret;
+}
+
+function loadFilesConfig(env: NodeJS.ProcessEnv, transport: Transport, publicUrl: string | undefined): FilesConfig | undefined {
+  const switched = env.FMSG_MCP_FILES_EXTENSION?.trim().toLowerCase();
+  if (switched && !["on", "off"].includes(switched)) throw new Error("FMSG_MCP_FILES_EXTENSION must be on or off");
+  if (switched === "off" || transport !== "http" || !publicUrl?.startsWith("https:")) return undefined;
+  const secret = stateSecret(env, transport);
+  const maxFile = env.FMSG_MCP_FILES_MAX_FILE_BYTES?.trim();
+  return {
+    maxInlineBytes: intEnv(env, "FMSG_MCP_FILES_MAX_INLINE_BYTES", 1024 * 1024, 0),
+    ...(maxFile ? { maxFileBytes: intEnv(env, "FMSG_MCP_FILES_MAX_FILE_BYTES", 0) } : {}),
+    targetTtlSeconds: intEnv(env, "FMSG_MCP_FILES_TARGET_TTL_SECONDS", 600, 10),
+    ...(secret ? { stateSecret: secret } : {}),
+  };
 }
 
 export type ConfigOverrides = { host?: string; port?: number };
@@ -163,9 +198,12 @@ export function loadConfig(
   if (publicUrl) oauthUrl(publicUrl, "FMSG_MCP_PUBLIC_URL");
   if (oauth && publicUrl !== oauth.resourceUrl) throw new Error("FMSG_MCP_PUBLIC_URL must match FMSG_MCP_OAUTH_RESOURCE_URL in OAuth mode");
 
+  const files = loadFilesConfig(env, transport, publicUrl);
+
   return {
     transport,
     apiUrl: normalizedApiUrl,
+    ...(files ? { files } : {}),
     ...(apiPublicUrl ? { apiPublicUrl } : {}),
     ...(oauth ? { oauth } : {}),
     allowInsecureHttp,

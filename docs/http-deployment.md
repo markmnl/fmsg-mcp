@@ -142,6 +142,18 @@ it as a secret. The caller a link acts for is kept in the process that issued it
 balancer, the link therefore works only when the request reaches that instance; elsewhere the answer
 is `404` with a message saying so. The proxy setup above already forwards these paths.
 
+### File-uploads extension targets
+
+With an https public URL the server also offers the MCP file-uploads extension (see the README and
+[the implementation notes](files-extension-notes.md)). Its upload targets are
+`PUT /mcp/uploads/{token}` under the same `/mcp` prefix, so the proxy setup above covers them, with
+the same streaming, idle timeout and body-size advice. Each target accepts one upload of the declared
+size and SHA-256 from the address it was issued to, and expires after `FMSG_MCP_FILES_TARGET_TTL_SECONDS`.
+A call's `requestState` and its targets are signed with a per-process key, so with several instances
+behind a load balancer set the same `FMSG_MCP_STATE_SECRET` (at least 32 bytes) on each. A
+single process deletes the draft of a call that was never retried once its targets expire. With a
+shared key no draft is deleted automatically, because another instance may have completed the call.
+
 Host and Origin validation applies to downloads and uploads too. Allowed browser clients can preflight GET
 with Authorization and read Content-Disposition. Hosts must attach the connection credential
 themselves; never ask the model to locate or copy tokens. Clients that cannot fetch authenticated

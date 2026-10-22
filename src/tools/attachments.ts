@@ -21,11 +21,13 @@ export type FileRoutes = {
   uploadFolder: boolean;
   /** get_attachment_upload_url issues single-use upload links that need no credentials (HTTP). */
   presigned: boolean;
+  /** The MCP file-uploads extension is offered, for clients that implement it. */
+  extension: boolean;
 };
 
 export function fileRoutes(config: Config, presigned = false): FileRoutes {
   const uploadUrl = Boolean(downloadBaseUrl(config));
-  return { uploadUrl, uploadFolder: Boolean(config.uploadDir), presigned: uploadUrl && presigned };
+  return { uploadUrl, uploadFolder: Boolean(config.uploadDir), presigned: uploadUrl && presigned, extension: Boolean(config.files) };
 }
 
 /** The routes for files too large for base64, in words for a model; empty when there are none. */
@@ -33,6 +35,7 @@ export function largeFileRoutes(routes: FileRoutes): string[] {
   return [
     ...(routes.uploadFolder ? ["path, a file in the upload folder"] : []),
     ...(routes.uploadUrl ? [`create_draft's upload URL${routes.presigned ? " (or a single-use link from get_attachment_upload_url)" : ""}`] : []),
+    ...(routes.extension ? ["the MCP file-uploads extension, if your client implements it"] : []),
   ];
 }
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPair } from "jose";
@@ -364,6 +365,34 @@ describe("HTTP OAuth", () => {
     await response.body?.cancel();
     expect(idp.exchanges).toHaveLength(0);
     expect(api.requests).toHaveLength(0);
+  });
+
+  it("serves the file-uploads extension over OAuth: targets need write scope and stream with the exchanged token", async () => {
+    await http.close();
+    http = createHttpServer({ ...configFor(api, "http"), oauth: idp.config, files: { maxInlineBytes: 1024, targetTtlSeconds: 600 } }, () => undefined);
+    await new Promise<void>(resolve => http.server.listen(0, "127.0.0.1", resolve));
+    base = `http://127.0.0.1:${(http.server.address() as AddressInfo).port}`;
+    const token = await idp.token();
+    const file = Buffer.from("over oauth");
+    const meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientInfo": { name: "t", version: "0" },
+      "io.modelcontextprotocol/clientCapabilities": { extensions: { "io.modelcontextprotocol/files": {} } } };
+    const args = { to: [BOB], topic: "t", body: "b", attachments: [{ id: "f", name: "f.txt", mimeType: "text/plain", size: file.byteLength,
+      digest: { algorithm: "sha-256", value: createHash("sha256").update(file).digest("base64url") } }] };
+    const rpc = async (params: Record<string, unknown>) => (await (await post(token, "tools/call", { name: "send_message", ...params, _meta: meta },
+      { "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "send_message" })).json()) as { result: Record<string, any> };
+    const first = await rpc({ arguments: args });
+    const target = first.result.inputRequests.uploads.params.files[0];
+    expect(target.url.startsWith(`${idp.config.resourceUrl}/uploads/`)).toBe(true);
+    const local = `${base}${new URL(target.url).pathname}`;
+    const readOnly = await fetch(local, { method: "PUT", body: file, headers: { authorization: `Bearer ${await idp.token({ scope: "fmsg:read" })}` } });
+    expect(readOnly.status).toBe(403);
+    expect(readOnly.headers.get("www-authenticate")).toContain('scope="fmsg:write"');
+    expect((await fetch(local, { method: "PUT", body: file, headers: { authorization: `Bearer ${token}` } })).status).toBe(201);
+    const done = await rpc({ arguments: args, requestState: first.result.requestState,
+      inputResponses: { uploads: { resultType: "complete", files: [{ fileId: "f", status: "completed" }] } } });
+    expect(done.result.isError).toBeFalsy();
+    expect(api.messages.get(done.result.structuredContent.id)!.attachments[0]!.data.toString()).toBe("over oauth");
+    for (const req of api.requests) expect(req.authorization).toBe(`Bearer ${idp.exchanges[0]!.token}`);
   });
 
   it("propagates upstream download scope denial and rechecks a revoked grant on token renewal", async () => {
