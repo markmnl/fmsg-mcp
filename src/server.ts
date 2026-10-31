@@ -17,6 +17,7 @@ import { registerSaveTool } from "./tools/save.js";
 import { registerDownloadTool } from "./tools/download.js";
 import { VERSION } from "./version.js";
 import type { PresignedLinks } from "./links.js";
+import { IndicatorRegistry } from "./indicators.js";
 
 export const SERVER_NAME = "fmsg";
 
@@ -29,6 +30,12 @@ export type CreateServerOptions = {
   shutdown?: AbortSignal;
   /** Issues presigned download and upload links (HTTP with a public URL). */
   links?: PresignedLinks;
+  /**
+   * Indicators kept up on the caller's behalf (FMSG-006). A factory that builds one server per HTTP request must pass a
+   * shared registry and close it on shutdown. Without one, the server owns its own and clears every indicator when it
+   * closes or `shutdown` aborts, which suits a server that lives for a whole session (stdio).
+   */
+  indicators?: IndicatorRegistry;
 };
 
 /**
@@ -44,9 +51,18 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   });
   const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
   const includeOwner = includeOwnerSchema(options.address, options.owner);
+  let indicators = options.indicators;
+  if (!indicators) {
+    const owned = new IndicatorRegistry();
+    indicators = owned;
+    const previous = server.server.onclose;
+    server.server.onclose = () => { owned.close(); previous?.(); };
+    options.shutdown?.addEventListener("abort", () => owned.close(), { once: true });
+    if (options.shutdown?.aborted) owned.close();
+  }
   const deps: ToolDeps = {
     provider, config, ...(includeOwner ? { includeOwner } : {}), ...(options.shutdown ? { shutdown: options.shutdown } : {}),
-    ...(options.links ? { links: options.links } : {}),
+    ...(options.links ? { links: options.links } : {}), indicators,
   };
   registerIdentityTools(server, deps);
   registerListTools(server, deps);

@@ -338,6 +338,22 @@ export class FmsgClient {
     };
   }
 
+  /**
+   * Show an FMSG-006 indicator, a short-lived emoji such as ⏳, on a message to its other participants for `ttl`
+   * seconds (1 to 120; the host clamps it). An empty emoji or a ttl of 0 clears it. The host answers 202 with no body
+   * and may drop indicators set more than once a second on one message. Hosts without indicators answer 404 or 405.
+   */
+  async indicate(id: string, emoji: string, ttl: number, signal?: AbortSignal): Promise<void> {
+    const mid = normalizeMessageId(id);
+    const response = await this.request(`/fmsg/${encodeURIComponent(mid)}/indicate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ emoji, ttl: emoji ? ttl : 0 }),
+      ...(signal ? { signal } : {}),
+    });
+    await response.body?.cancel();
+  }
+
   async downloadAttachment(
     id: string,
     filename: string,

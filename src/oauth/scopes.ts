@@ -10,7 +10,7 @@ export const TOOL_SCOPES: Record<string, string[]> = {
   get_thread: [READ_SCOPE], delivery_status: [READ_SCOPE], download_attachment: [READ_SCOPE],
   save_attachment: [READ_SCOPE], get_attachment_download_url: [READ_SCOPE], wait_for_message: [READ_SCOPE],
   send_message: [WRITE_SCOPE], reply: MESSAGING_SCOPES,
-  mark_read: [WRITE_SCOPE], add_recipients: [WRITE_SCOPE], react: [WRITE_SCOPE],
+  mark_read: [WRITE_SCOPE], add_recipients: [WRITE_SCOPE], react: [WRITE_SCOPE], indicate: [WRITE_SCOPE],
   create_draft: MESSAGING_SCOPES, send_draft: MESSAGING_SCOPES, delete_draft: MESSAGING_SCOPES,
   get_attachment_upload_url: MESSAGING_SCOPES,
 };

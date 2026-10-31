@@ -25,6 +25,7 @@ import { BUILD, VERSION } from "./version.js";
 import { safeErrorMessage } from "./client/redact.js";
 import { isLoopbackHost, normalizeOrigin } from "./client/url.js";
 import { LINK_PATH, PresignedLinks } from "./links.js";
+import { IndicatorRegistry } from "./indicators.js";
 import { createHash } from "node:crypto";
 
 export const MCP_PATH = "/mcp";
@@ -222,15 +223,23 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const shutdown = new AbortController();
   // Presigned links need the public URL to build them; they carry their own authorization.
   const links = downloadBaseUrl(config) ? new PresignedLinks(downloadBaseUrl(config)!, config.http.stateSecret) : undefined;
-  const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => createMcpHandler(({ authInfo }) =>
-    createFmsgMcpServer(provider, config, {
-      ...(authInfo ? { address: address(authInfo) } : {}),
-      ...(typeof authInfo?.extra?.owner === "string" ? { owner: authInfo.extra.owner } : {}),
-      shutdown: shutdown.signal,
-      ...(links ? { links } : {}),
-    }),
-    { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
-  );
+  // Each MCP request gets its own server instance, so indicators kept up between requests live here, one registry
+  // per provider so that combined mode never shares a caller's indicators across authentication paths.
+  const registries: IndicatorRegistry[] = [];
+  const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => {
+    const indicators = new IndicatorRegistry();
+    registries.push(indicators);
+    return createMcpHandler(({ authInfo }) =>
+      createFmsgMcpServer(provider, config, {
+        ...(authInfo ? { address: address(authInfo) } : {}),
+        ...(typeof authInfo?.extra?.owner === "string" ? { owner: authInfo.extra.owner } : {}),
+        shutdown: shutdown.signal,
+        ...(links ? { links } : {}),
+        indicators,
+      }),
+      { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
+    );
+  };
   const oauthHandler = oauthProvider && mcpHandler(oauthProvider, (authInfo) => String(authInfo.extra?.address ?? ""));
   const apiKeyHandler = apiKeyProvider && mcpHandler(apiKeyProvider, (authInfo) => authInfo.clientId);
   const active = new Map<AbortController, { res: ServerResponse; done: Promise<void> }>();
@@ -469,6 +478,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const close = ({ graceMs = SHUTDOWN_GRACE_MS }: { graceMs?: number } = {}) => closing ??= (async () => {
     // Waits answer "interrupted" with a resumable cursor; new requests get 503.
     shutdown.abort();
+    for (const indicators of registries) indicators.close();
     const closed = new Promise<void>((resolve) => server.close(() => resolve()));
     server.closeIdleConnections();
     let timer: NodeJS.Timeout | undefined;

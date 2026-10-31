@@ -49,7 +49,7 @@ describe("tools (stdio-shaped)", () => {
     }
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      "add_recipients", "create_draft", "delete_draft", "delivery_status", "download_attachment", "get_message", "get_thread", "list_messages",
+      "add_recipients", "create_draft", "delete_draft", "delivery_status", "download_attachment", "get_message", "get_thread", "indicate", "list_messages",
       "list_sent", "mark_read", "react", "reply", "resolve_address", "send_draft", "send_message", "wait_for_message", "whoami",
     ]);
     const send = tools.find((t) => t.name === "send_message")!;

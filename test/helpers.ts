@@ -5,6 +5,7 @@ import { FmsgClient } from "../src/client/client.js";
 import { loadConfig, type Config, type Transport } from "../src/config.js";
 import { StaticCallerProvider, type CallerProvider } from "../src/context.js";
 import { type CreateServerOptions, createFmsgMcpServer } from "../src/server.js";
+import { IndicatorRegistry } from "../src/indicators.js";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
 
 export const ALICE = "@alice@example.com";
@@ -48,11 +49,14 @@ export async function connectHttpShaped(
   provider: CallerProvider,
   authInfo: AuthInfo | undefined,
   config = configFor(fake, "http"),
-): Promise<Harness & { handler: McpHttpHandler }> {
+  indicators = new IndicatorRegistry(),
+): Promise<Harness & { handler: McpHttpHandler; indicators: IndicatorRegistry }> {
+  // Like createHttpServer: one server per request, so indicators live in a registry shared across requests.
   const handler = createMcpHandler(({ authInfo: a }) =>
     createFmsgMcpServer(provider, config, {
       ...(a?.clientId ? { address: a.clientId } : {}),
       ...(typeof a?.extra?.owner === "string" ? { owner: a.extra.owner } : {}),
+      indicators,
     }),
   );
   const transport = new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
@@ -63,8 +67,10 @@ export async function connectHttpShaped(
   return {
     client,
     handler,
+    indicators,
     fmsg: new FmsgClient(fake.baseUrl, "fmsgk_alice_secret"),
     close: async () => {
+      indicators.close();
       await client.close();
       await handler.close();
     },

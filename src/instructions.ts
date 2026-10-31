@@ -51,7 +51,9 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
       "added to a message after it was sent; they can read it and its attachments.",
     "To check the inbox: list_messages with unread_only, get_thread on what matters, act or reply, then mark_read " +
       "what you have handled; reading does not mark a message read. There is no search: to find a thread by name, " +
-      "find its first message by topic in list_messages, then get_thread on a later message for the conversation.",
+      "find its first message by topic in list_messages, then get_thread on a later message for the conversation. " +
+      "Reading someone else's message shows them ⏳ while you work on it, cleared when you reply, react or mark it read; " +
+      "indicate sets or clears a status explicitly.",
     filesParagraph(ctx.files),
     "Carry out the user's requested messaging task or authorized automation without repeatedly asking for " +
       "confirmation. Sending is immediate and sent messages cannot be edited or recalled. Ask the user only " +

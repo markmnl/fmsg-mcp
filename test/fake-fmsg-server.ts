@@ -102,6 +102,10 @@ export class FakeFmsgServer {
   rejectNextProtected = false;
   /** Override an authorized attachment response to exercise streaming failures/cancellation. */
   attachmentResponse?: (req: IncomingMessage, res: ServerResponse, attachment: StoredMessage["attachments"][number]) => void;
+  /** Indicators set or cleared (FMSG-006), in arrival order. */
+  readonly indicators: Array<{ id: string; from: string; emoji: string; ttl: number }> = [];
+  /** false makes /indicate answer 404, like a host without indicators. */
+  indicatorsSupported = true;
   /** Make thread/messages answer 422 thread_too_deep. */
   threadTooDeep = false;
   shortTextBytes = 768;
@@ -467,6 +471,23 @@ export class FakeFmsgServer {
       const r = this.seed({ from: subject, to: others, pid: m.id, type: "text/plain;charset=UTF-8", data: emoji, reaction: emoji, no_reply: true, terminal: true });
       for (const addr of this.participants(m)) for (const ws of this.sockets.get(addr) ?? []) ws.send(this.encode({ type: "reaction", data: this.listItem(m, addr) }));
       return this.json(res, 201, { id: r.id, time: r.time });
+    }
+    if (method === "POST" && sub === "indicate") {
+      const input = JSON.parse((await readBody(req)).toString("utf8")) as { emoji?: string; ttl?: number };
+      log.body = input;
+      if (!this.indicatorsSupported) return this.json(res, 404, { error: "not found" });
+      const emoji = typeof input.emoji === "string" ? input.emoji : "";
+      if (Buffer.byteLength(emoji) > 64) return this.json(res, 400, { error: "emoji must be a single emoji, or empty to clear" });
+      if (!this.participants(m).has(subject)) return this.json(res, 403, { error: "only participants may show an indicator on a message" });
+      if (m.time === null) return this.json(res, 409, { error: "cannot show an indicator on a draft" });
+      if (m.terminal) return this.json(res, 409, { error: "message is terminal; it cannot be replied to" });
+      let ttl = typeof input.ttl === "number" ? Math.min(input.ttl, 120) : 6;
+      if (!emoji || ttl === 0) ttl = 0;
+      const indicator = { id: m.id, from: subject, emoji: ttl ? emoji : "", ttl };
+      this.indicators.push(indicator);
+      for (const addr of this.participants(m)) for (const ws of this.sockets.get(addr) ?? []) ws.send(this.encode({ type: "indicator", data: { ...indicator, root_id: m.id } }));
+      res.writeHead(202);
+      return res.end();
     }
     if (method === "GET" && sub === "data") {
       res.writeHead(200, { "content-type": m.type || "application/octet-stream", "content-disposition": "attachment" });

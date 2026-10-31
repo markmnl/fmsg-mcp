@@ -7,5 +7,6 @@ export { ApiKeyCallerProvider } from "./auth.js";
 export { waitForMessage, type WaitOptions, type WaitResult } from "./wait.js";
 export { assembleThread, renderThread, type AssembledThread } from "./thread.js";
 export { resolveAddress, resolveAddresses, normalizeFmsgAddress } from "./address.js";
+export { IndicatorRegistry, type IndicatorOptions } from "./indicators.js";
 export { VERSION } from "./version.js";
 export * from "./client/index.js";
