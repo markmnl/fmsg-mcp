@@ -147,6 +147,8 @@ describe("published output schemas", () => {
     await run(local.client, "add_recipients", { id: own.id, recipients: [CAROL] });
     await run(local.client, "react", { id: root.id, emoji: "🎉" });
     await run(local.client, "react", { id: root.id, emoji: null });
+    await run(local.client, "indicate", { id: root.id, emoji: "✍️", ttl: 30 });
+    await run(local.client, "indicate", { id: root.id, emoji: "" });
     await run(local.client, "send_message", { to: ["bob"], topic: "new", body: "hello",
       attachments: [{ filename: "a.txt", data_base64: Buffer.from("x").toString("base64") }] });
     await run(local.client, "reply", { id: reply.id, body: "thanks" });

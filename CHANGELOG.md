@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- FMSG-006 indicators. Reading someone else's message with `get_message` or `get_thread` shows its
+  participants ⏳ while the agent works on it, refreshed every 30 s and cleared when the agent replies in
+  that thread, reacts, marks it read, after 5 minutes, or when the session ends. The new `indicate` tool
+  sets a status explicitly (such as ✍️) or clears it with an empty emoji. Indicators are best effort and
+  never fail a tool, including on hosts without them. `FmsgClient.indicate()` posts to
+  `/fmsg/{id}/indicate`; `createFmsgMcpServer` takes an optional shared `indicators` registry for
+  per-request HTTP factories.
 - Presigned links for hosts that cannot send the connection's Authorization header with their own HTTP
   requests: `get_attachment_download_url` with `presigned: true`, and the new `get_attachment_upload_url` for
   draft files. Each link is single-use, valid for 5 minutes and bound to one file's size and sha256 (`/mcp/links/{token}`),

@@ -119,7 +119,7 @@ are refused.
 | Operations | Required scope |
 |---|---|
 | Identity/address lookup, inbox/sent, message/thread, delivery status, attachment download, wait, resource reads | `fmsg:read` |
-| Send a new message, add recipients, react, mark read | `fmsg:write` |
+| Send a new message, add recipients, react, show an indicator (`indicate`), mark read | `fmsg:write` |
 | Reply (reads the parent before sending) | `fmsg:read fmsg:write` |
 | Protocol initialization, tool/resource/prompt discovery and prompt templates | Valid incoming token; no messaging scope needed |
 

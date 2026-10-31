@@ -7,7 +7,7 @@ import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../up
 import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, prepareAttachments } from "./attachments.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { type ParentReference, parentReference, replyParent } from "./parent.js";
-import { rootTopic } from "./read.js";
+import { threadRoot } from "./read.js";
 import {
   IMMUTABLE, IMPORTANT, NO_REPLY, hintOutput, uploadSteps, redactionNote, replyRecipients, resolveRecipients, resolvedNote, resolvedOutput,
   sendWarnings, sentAttachments, sentOutput, withHint,
@@ -133,6 +133,9 @@ export const registerDraftTools: Register = (server, deps) => {
         if (draft.time !== null && draft.time !== undefined) return toolError(`message ${id} was already sent; send_draft sends only drafts`);
         const sent = await caller.client.sendDraft(draft.id, signal);
         const topic = draft.pid ? "" : (draft.topic ?? "");
+        // The message is already sent: a failed root lookup only leaves the topic unknown.
+        const root = draft.pid ? await threadRoot(caller.client, { ...draft, id: sent.id }, signal).catch(() => ({ id: null, topic: null })) : null;
+        if (draft.pid) deps.indicators.replied(caller, draft.pid, root?.id ?? null);
         const structured = {
           id: sent.id,
           time: isoTime(sent.time),
@@ -144,8 +147,7 @@ export const registerDraftTools: Register = (server, deps) => {
           redactions: 0,
           redacted: [],
           warnings: [],
-          // The message is already sent: a failed topic lookup only leaves the topic unknown.
-          thread_topic: draft.pid ? await rootTopic(caller.client, { ...draft, id: sent.id }, signal).catch(() => null) : topic,
+          thread_topic: root ? root.topic : topic,
         };
         const where = draft.pid ? `reply to message ${draft.pid}` : `"${headerValue(topic)}"`;
         const text = `Sent draft ${sent.id} (${where}) to ${addressList(draft.to)} at ${structured.time ?? "?"}` +

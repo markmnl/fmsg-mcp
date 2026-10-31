@@ -10,7 +10,8 @@ import { addressList, addressText, attachmentType, headerValue, isoTime, partici
 import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { parentReference, replyParent } from "./parent.js";
-import { rootTopic } from "./read.js";
+import { WORKING_EMOJI } from "../indicators.js";
+import { threadRoot } from "./read.js";
 
 export const IMMUTABLE = "fmsg messages are immutable: once sent they cannot be edited or recalled. Send within the user's requested task or authorized automation.";
 
@@ -215,6 +216,9 @@ export const registerSendTools: Register = (server, deps) => {
         const outbound = await prepareAttachments(attachments, deps.config);
         const hint = base64Hint(attachments, routes);
         const sent = await sendWithAttachments(caller.client, { to, ...parentReference(caller, parent), body, type, important, noReply: no_reply }, outbound, signal);
+        // The reply is already sent: a failed root lookup only leaves the topic unknown.
+        const root = await threadRoot(caller.client, parent, signal).catch(() => ({ id: null, topic: null }));
+        deps.indicators.replied(caller, parent.id, root.id);
         const structured = {
           id: sent.id,
           time: isoTime(sent.time),
@@ -227,8 +231,7 @@ export const registerSendTools: Register = (server, deps) => {
           redacted: sent.redacted,
           ...(resolved.length ? { resolved } : {}),
           warnings: sendWarnings(sent.redactions, sent.redacted, resolved),
-          // The reply is already sent: a failed topic lookup only leaves the topic unknown.
-          thread_topic: await rootTopic(caller.client, parent, signal).catch(() => null),
+          thread_topic: root.topic,
           ...(hint ? { hint } : {}),
         };
         const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
@@ -288,8 +291,39 @@ export const registerSendTools: Register = (server, deps) => {
       withCaller(deps, ctx, async (caller, signal) => {
         const value = emoji && emoji.trim() ? emoji.trim() : null;
         const result = await caller.client.react(id, value, signal);
+        deps.indicators.handled(caller, [id]);
         const structured = { id, reaction_id: result.id, time: isoTime(result.time), cleared: value === null };
         return ok(value ? `Reacted ${value} to message ${id}` : `Cleared your reaction on message ${id}`, structured);
+      }),
+  );
+  server.registerTool(
+    "indicate",
+    {
+      title: "Show fmsg indicator",
+      description:
+        "Show the other participants of a message a short-lived status, such as ⏳ while you work on a reply or ✍️ while " +
+        "composing. It is kept up while you work (up to 5 minutes) and expires on its own; reply, react and mark_read " +
+        "clear it, and an empty emoji clears it now. Reading someone else's message already shows ⏳.",
+      inputSchema: z.strictObject({
+        id: idSchema,
+        emoji: z.string().max(32).default(WORKING_EMOJI).describe("a single emoji such as ⏳ or ✍️; empty clears"),
+        ttl: z.number().int().min(1).max(120).default(60).describe("seconds it lasts unless refreshed"),
+      }),
+      outputSchema: outputObject({
+        id: z.string(),
+        emoji: z.string().describe("the emoji shown; empty when cleared"),
+        ttl: z.number().describe("seconds; 0 when cleared"),
+        cleared: z.boolean(),
+      }),
+      annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ id, emoji, ttl }, ctx) =>
+      withCaller(deps, ctx, async (caller) => {
+        const value = emoji.trim();
+        await deps.indicators.indicate(caller, id, value, ttl);
+        const structured = { id, emoji: value, ttl: value ? ttl : 0, cleared: !value };
+        return ok(value ? `Showing ${value} on message ${id} until you reply, react, mark it read or clear it (up to 5 minutes)`
+          : `Cleared your indicator on message ${id}`, structured);
       }),
   );
 };

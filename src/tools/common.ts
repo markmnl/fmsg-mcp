@@ -3,6 +3,7 @@ import * as z from "zod/v4";
 import type { AddressResolver } from "../address.js";
 import type { FmsgMessage, RecipientDelivery } from "../client/types.js";
 import type { Config } from "../config.js";
+import type { IndicatorRegistry } from "../indicators.js";
 import type { PresignedLinks } from "../links.js";
 import { type Caller, type CallerProvider, callerFor } from "../context.js";
 import { toolError } from "../errors.js";
@@ -19,6 +20,8 @@ export type ToolDeps = {
   shutdown?: AbortSignal;
   /** Presigned links, when this server has a public URL. */
   links?: PresignedLinks;
+  /** FMSG-006 indicators shown on the caller's behalf (⏳ while working on a reply). */
+  indicators: IndicatorRegistry;
 };
 
 export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
