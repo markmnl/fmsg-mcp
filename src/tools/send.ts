@@ -302,8 +302,8 @@ export const registerSendTools: Register = (server, deps) => {
       title: "Show fmsg indicator",
       description:
         "Show the other participants of a message a short-lived status, such as ⏳ while you work on a reply or ✍️ while " +
-        "composing. It is kept up while you work (up to 5 minutes) and expires on its own; reply, react and mark_read " +
-        "clear it, and an empty emoji clears it now. Reading someone else's message already shows ⏳.",
+        "composing. Nothing is shown unless you call this. It is kept up while you work (up to 5 minutes) and expires on " +
+        "its own; reply, react and mark_read clear it, and an empty emoji clears it now.",
       inputSchema: z.strictObject({
         id: idSchema,
         emoji: z.string().max(32).default(WORKING_EMOJI).describe("a single emoji such as ⏳ or ✍️; empty clears"),
@@ -318,9 +318,11 @@ export const registerSendTools: Register = (server, deps) => {
       annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
     },
     async ({ id, emoji, ttl }, ctx) =>
-      withCaller(deps, ctx, async (caller) => {
+      withCaller(deps, ctx, async (caller, signal) => {
         const value = emoji.trim();
-        await deps.indicators.indicate(caller, id, value, ttl);
+        // The thread root lets a reply anywhere in the thread clear it; a failed lookup only means it is not known.
+        const rootId = value ? await caller.client.getThreadMessages(id, signal).then((thread) => thread.root_id, () => null) : null;
+        await deps.indicators.indicate(caller, id, value, ttl, rootId);
         const structured = { id, emoji: value, ttl: value ? ttl : 0, cleared: !value };
         return ok(value ? `Showing ${value} on message ${id} until you reply, react, mark it read or clear it (up to 5 minutes)`
           : `Cleared your indicator on message ${id}`, structured);

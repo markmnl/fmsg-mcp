@@ -64,8 +64,7 @@ describe("MCP-owned safety boundaries", () => {
       const r = await h.client.readResource({ uri: `fmsg://${kind}/${m.id}` });
       expect((r.contents[0] as { text: string }).text.startsWith(DATA_NOT_INSTRUCTIONS)).toBe(true);
     }
-    // Reading changes nothing stored; the only writes are the ephemeral ⏳ indicator (FMSG-006) on the message read.
-    expect(fake.requests.filter(r => r.method === "POST" && r.path !== "/fmsg/token" && r.path !== `/fmsg/${m.id}/indicate`)).toEqual([]);
+    expect(fake.requests.some(r => r.method === "POST" && r.path !== "/fmsg/token")).toBe(false);
     expect((await h.client.listTools()).tools.find(t => t.name === "react")?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
   });
 
