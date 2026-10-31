@@ -150,7 +150,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `delete_draft` | Discard an unsent draft |
 | `add_recipients` | Add `recipients` to a sent message (`add_to` is a deprecated alias) |
 | `react` | Set or clear your emoji reaction |
-| `indicate` | Show the other participants a short-lived status on a message, such as ⏳ while working on a reply or ✍️ while composing (FMSG-006 indicator; `ttl` 1–120 s, default 60); an empty `emoji` clears it |
+| `indicate` | Show the other participants a short-lived status on a message, such as ⏳ while working on a reply or ✍️ while composing (FMSG-006 indicator; `ttl` 1–120 s, default 60), kept up until you reply, react or mark it read (up to 5 minutes); an empty `emoji` clears it. Reading a message never shows one |
 | `mark_read` | Mark received messages read |
 | `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources; a wrong filename lists the names the message has |
 | `get_attachment_download_url` | Get a credential-free URL and resource link for an authenticated binary download; with `presigned: true`, also a single-use link valid for 5 minutes that needs no Authorization header, with its size, sha256 and a curl command. HTTP only, requires a public MCP URL |
@@ -182,18 +182,18 @@ example "must NOT have additional properties"); remove and re-add the connector 
 
 ### Indicators
 
-Reading someone else's message with `get_message` or `get_thread` (the message it was called with)
-shows its other participants ⏳ while the agent works on it: an
-[FMSG-006](https://github.com/markmnl/fmsg/blob/main/standards/fmsg-006-indicators.md) indicator,
-sent at once with a 60 s ttl and refreshed every 30 s. It is cleared when the agent replies to that
-message or anywhere in its thread (`reply`, or `send_draft` of a reply), reacts to it, marks it
-read, clears it with `indicate`, or after 5 minutes, and when the session ends or the server shuts
-down. Nothing is shown on your own messages, drafts, terminal or no-reply messages. `indicate`
-with an emoji replaces ⏳ and is kept up the same way. At most 10 are kept up per address, the
-oldest cleared first. Indicators are best effort: a host without them (404/405), a missing
-`fmsg:write` grant or any other failure never fails a tool call. Over HTTP each MCP request gets a
-fresh server instance, so indicators are kept per address by the HTTP server; embedders that
-build one server per request pass a shared `IndicatorRegistry` as `indicators`.
+`indicate` shows a message's other participants a short-lived status, such as ⏳ while the agent
+works on a reply or ✍️ while composing: an
+[FMSG-006](https://github.com/markmnl/fmsg/blob/main/standards/fmsg-006-indicators.md) indicator.
+Nothing is shown unless the agent calls it; reading a message never does. It is sent at once with
+its `ttl` (default 60 s) and refreshed at half the ttl (every 1–30 s) until the agent replies to
+that message or anywhere in its thread (`reply`, or `send_draft` of a reply), reacts to it, marks it
+read, clears it with an empty `emoji`, or after 5 minutes, and when the session ends or the server
+shuts down. At most 10 are kept up per address, the oldest cleared first. `indicate` returns the
+host's refusal (such as a terminal message, or a host without indicators); refreshes and automatic
+clears are best effort and never fail another tool. Over HTTP each MCP request gets a fresh server
+instance, so indicators are kept per address by the HTTP server; embedders that build one server per
+request pass a shared `IndicatorRegistry` as `indicators`.
 
 Resources `fmsg://message/{id}` and `fmsg://thread/{id}` expose the same content to hosts that
 attach resources; prompts `chat` and `reply` script the wait → reply loop and a guided reply, and

@@ -31,9 +31,10 @@ export type CreateServerOptions = {
   /** Issues presigned download and upload links (HTTP with a public URL). */
   links?: PresignedLinks;
   /**
-   * Indicators kept up on the caller's behalf (FMSG-006). A factory that builds one server per HTTP request must pass a
-   * shared registry and close it on shutdown. Without one, the server owns its own and clears every indicator when it
-   * closes or `shutdown` aborts, which suits a server that lives for a whole session (stdio).
+   * Indicators set with the indicate tool and kept up on the caller's behalf (FMSG-006). A factory that builds one
+   * server per HTTP request must pass a shared registry and close it on shutdown. Without one, the server owns its own
+   * and clears every indicator when it closes or `shutdown` aborts, which suits a server that lives for a whole session
+   * (stdio).
    */
   indicators?: IndicatorRegistry;
 };

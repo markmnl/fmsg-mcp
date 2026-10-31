@@ -20,7 +20,7 @@ export type ToolDeps = {
   shutdown?: AbortSignal;
   /** Presigned links, when this server has a public URL. */
   links?: PresignedLinks;
-  /** FMSG-006 indicators shown on the caller's behalf (⏳ while working on a reply). */
+  /** FMSG-006 indicators the caller sets with the indicate tool, kept up until replied, handled or cleared. */
   indicators: IndicatorRegistry;
 };
 

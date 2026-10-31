@@ -24,8 +24,6 @@ function fakeCaller(fail: (sent: Sent) => unknown = () => undefined, address = A
   return { client, address, tokenExpiresAt: async () => Date.now() + 3_600_000, sent };
 }
 
-const fromBob = (id: string) => ({ id, from: BOB, time: 1, terminal: false, no_reply: false });
-
 describe("FmsgClient.indicate", () => {
   let fake: FakeFmsgServer;
   beforeEach(async () => { fake = new FakeFmsgServer(); await fake.start(); });
@@ -49,11 +47,10 @@ describe("IndicatorRegistry timers", () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it("sends ⏳ at once with ttl 60, refreshes every 30 s and clears after 5 minutes", async () => {
+  it("sends at once, refreshes at half its ttl (at most every 30 s) and clears after 5 minutes", async () => {
     const registry = new IndicatorRegistry();
     const caller = fakeCaller();
-    registry.read(caller, fromBob("7"), null);
-    await vi.advanceTimersByTimeAsync(0);
+    await registry.indicate(caller, "7", "⏳", 60);
     expect(caller.sent).toEqual([{ id: "7", emoji: "⏳", ttl: 60 }]);
     await vi.advanceTimersByTimeAsync(29_999);
     expect(caller.sent).toHaveLength(1);
@@ -70,29 +67,14 @@ describe("IndicatorRegistry timers", () => {
     expect(caller.sent).toHaveLength(11);
   });
 
-  it("starts only on others' messages that can be answered, once per message", async () => {
-    const registry = new IndicatorRegistry();
-    const caller = fakeCaller();
-    registry.read(caller, { id: "1", from: "@Alice@Example.com", time: 1 }, null);
-    registry.read(caller, { id: "2", from: BOB, time: null }, null);
-    registry.read(caller, { id: "3", from: BOB, time: 1, terminal: true }, null);
-    registry.read(caller, { id: "4", from: BOB, time: 1, no_reply: true }, null);
-    registry.read(caller, fromBob("5"), null);
-    registry.read(caller, fromBob("5"), "5");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(caller.sent).toEqual([{ id: "5", emoji: "⏳", ttl: 60 }]);
-    registry.close();
-  });
-
   it("stops on reply in the thread, reaction, mark_read and close, clearing each once", async () => {
     const registry = new IndicatorRegistry();
     const caller = fakeCaller();
-    registry.read(caller, fromBob("10"), "1");
-    registry.read(caller, fromBob("11"), "1");
-    registry.read(caller, fromBob("20"), "2");
-    registry.read(caller, fromBob("30"), null);
-    registry.read(caller, fromBob("40"), null);
-    await vi.advanceTimersByTimeAsync(0);
+    await registry.indicate(caller, "10", "⏳", 60, "1");
+    await registry.indicate(caller, "11", "⏳", 60, "1");
+    await registry.indicate(caller, "20", "⏳", 60, "2");
+    await registry.indicate(caller, "30", "⏳", 60);
+    await registry.indicate(caller, "40", "⏳", 60);
     caller.sent.length = 0;
 
     registry.replied(caller, "12", "1");
@@ -107,56 +89,68 @@ describe("IndicatorRegistry timers", () => {
     registry.close();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(caller.sent.slice(4)).toEqual([{ id: "40", emoji: "", ttl: 0 }]);
-    registry.read(caller, fromBob("50"), null);
+    // Once closed, indicate still shows the emoji once but keeps nothing up.
+    await registry.indicate(caller, "50", "⏳", 60);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(caller.sent).toHaveLength(5);
+    expect(caller.sent.slice(5)).toEqual([{ id: "50", emoji: "⏳", ttl: 60 }]);
+    expect(registry.active(caller)).toEqual([]);
   });
 
   it("keeps at most 10 per caller, clearing the oldest", async () => {
     const registry = new IndicatorRegistry();
     const caller = fakeCaller();
-    for (let i = 1; i <= 11; i++) registry.read(caller, fromBob(String(i)), null);
+    for (let i = 1; i <= 11; i++) await registry.indicate(caller, String(i), "⏳", 60);
     await vi.advanceTimersByTimeAsync(0);
     expect(registry.active(caller)).toEqual(["2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]);
     expect(caller.sent.filter((s) => s.emoji === "")).toEqual([{ id: "1", emoji: "", ttl: 0 }]);
     const other = fakeCaller(undefined, CAROL);
-    registry.read(other, fromBob("1"), null);
+    await registry.indicate(other, "1", "⏳", 60);
     expect(registry.active(other)).toEqual(["1"]);
     registry.close();
   });
 
-  it("an explicit indicator replaces ⏳ and refreshes at half its ttl; clearing stops it without a second clear", async () => {
+  it("a new emoji replaces the old and refreshes at half its ttl; clearing stops it without a second clear", async () => {
     const registry = new IndicatorRegistry();
     const caller = fakeCaller();
-    registry.read(caller, fromBob("9"), null);
+    await registry.indicate(caller, "9", "⏳", 60, "1");
     await registry.indicate(caller, "9", "✍️", 10);
     expect(caller.sent).toEqual([{ id: "9", emoji: "⏳", ttl: 60 }, { id: "9", emoji: "✍️", ttl: 10 }]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(caller.sent.at(-1)).toEqual({ id: "9", emoji: "✍️", ttl: 10 });
     expect(caller.sent).toHaveLength(3);
+    // The replacement keeps the thread root it was first set with.
+    registry.replied(caller, "8", "1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(caller.sent.slice(3)).toEqual([{ id: "9", emoji: "", ttl: 0 }]);
+    expect(registry.active(caller)).toEqual([]);
+
+    await registry.indicate(caller, "9", "✍️", 10);
     await registry.indicate(caller, "9", "", 60);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(caller.sent.slice(3)).toEqual([{ id: "9", emoji: "", ttl: 0 }]);
+    expect(caller.sent.slice(4)).toEqual([{ id: "9", emoji: "✍️", ttl: 10 }, { id: "9", emoji: "", ttl: 0 }]);
     expect(registry.active(caller)).toEqual([]);
   });
 
-  it("swallows failures: keeps refreshing after transient ones, stops after a refusal or a missing route", async () => {
+  it("swallows refresh failures: keeps refreshing after transient ones, stops after a refusal or a missing route", async () => {
     const registry = new IndicatorRegistry();
-    const transient = fakeCaller(() => new FmsgHttpError("unavailable", 503, "POST", "/fmsg/1/indicate"));
-    registry.read(transient, fromBob("1"), null);
+    let transientSends = 0;
+    const transient = fakeCaller(() => transientSends++ ? new FmsgHttpError("unavailable", 503, "POST", "/fmsg/1/indicate") : undefined);
+    await registry.indicate(transient, "1", "⏳", 60);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(transient.sent).toHaveLength(3);
     expect(registry.active(transient)).toEqual(["1"]);
 
-    const older = fakeCaller(() => new FmsgHttpError("not found", 404, "POST", "/fmsg/2/indicate"), BOB);
-    registry.read(older, { id: "2", from: CAROL, time: 1 }, null);
+    let olderSends = 0;
+    const older = fakeCaller(() => olderSends++ ? new FmsgHttpError("not found", 404, "POST", "/fmsg/2/indicate") : undefined, BOB);
+    await registry.indicate(older, "2", "⏳", 60);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(older.sent).toEqual([{ id: "2", emoji: "⏳", ttl: 60 }]);
+    expect(older.sent).toEqual([{ id: "2", emoji: "⏳", ttl: 60 }, { id: "2", emoji: "⏳", ttl: 60 }]);
     expect(registry.active(older)).toEqual([]);
 
+    // The first send is the tool's own: its failure is returned and nothing is kept up.
     const throwing = fakeCaller(() => new Error("boom"), CAROL);
-    expect(() => registry.read(throwing, fromBob("3"), null)).not.toThrow();
     await expect(registry.indicate(throwing, "3", "✍️", 30)).rejects.toThrow("boom");
+    expect(registry.active(throwing)).toEqual([]);
     registry.close();
     await vi.advanceTimersByTimeAsync(0);
   });
@@ -165,21 +159,23 @@ describe("IndicatorRegistry timers", () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const order: string[] = [];
+    let sends = 0;
     const client = {
       indicate: async (_id: string, emoji: string) => {
-        if (emoji) await gate;
+        if (emoji && ++sends > 1) await gate;
         order.push(emoji || "clear");
       },
     } as unknown as FmsgClient;
     const caller: Caller = { client, address: ALICE, tokenExpiresAt: async () => 0 };
     const registry = new IndicatorRegistry();
-    registry.read(caller, fromBob("1"), null);
+    await registry.indicate(caller, "1", "⏳", 60);
+    await vi.advanceTimersByTimeAsync(30_000);
     registry.handled(caller, ["1"]);
     await vi.advanceTimersByTimeAsync(0);
-    expect(order).toEqual([]);
+    expect(order).toEqual(["⏳"]);
     release();
     await vi.advanceTimersByTimeAsync(0);
-    expect(order).toEqual(["⏳", "clear"]);
+    expect(order).toEqual(["⏳", "⏳", "clear"]);
   });
 });
 
@@ -202,27 +198,28 @@ describe("indicators through the tools", () => {
     await fake.stop();
   });
 
-  it("get_message and get_thread show ⏳ on others' messages, not on your own", async () => {
+  it("get_message and get_thread do not post an indicator", async () => {
     const root = fake.seed({ from: BOB, to: [ALICE], topic: "plans", data: "root" });
-    const mine = fake.seed({ from: ALICE, to: [BOB], pid: root.id, data: "mine" });
-    const theirs = fake.seed({ from: BOB, to: [ALICE], pid: mine.id, data: "theirs" });
+    const next = fake.seed({ from: BOB, to: [ALICE], pid: root.id, data: "next" });
     structured(await call(h.client, "get_message", { id: root.id }));
-    structured(await call(h.client, "get_thread", { id: theirs.id }));
-    structured(await call(h.client, "get_message", { id: mine.id }));
-    structured(await call(h.client, "get_thread", { id: mine.id }));
-    await vi.waitFor(() => expect(fake.indicators.map((i) => [i.id, i.emoji, i.ttl])).toEqual([[root.id, "⏳", 60], [theirs.id, "⏳", 60]]));
-    expect(registry.active(caller())).toEqual([root.id, theirs.id]);
+    structured(await call(h.client, "get_message", { id: next.id }));
+    structured(await call(h.client, "get_thread", { id: next.id }));
+    await sleep(50);
+    expect(fake.requests.filter((r) => r.path.endsWith("/indicate"))).toEqual([]);
+    expect(fake.indicators).toEqual([]);
+    expect(registry.active(caller())).toEqual([]);
   });
 
   it("reply anywhere in the thread, react and mark_read clear it", async () => {
     const root = fake.seed({ from: BOB, to: [ALICE], topic: "plans", data: "root" });
     const next = fake.seed({ from: BOB, to: [ALICE], pid: root.id, data: "next" });
+    const later = fake.seed({ from: BOB, to: [ALICE], pid: next.id, data: "later" });
     const other = fake.seed({ from: CAROL, to: [ALICE], topic: "other", data: "o" });
     const third = fake.seed({ from: CAROL, to: [ALICE], topic: "third", data: "t" });
-    for (const id of [root.id, next.id, other.id, third.id]) structured(await call(h.client, "get_message", { id }));
-    await vi.waitFor(() => expect(fake.indicators).toHaveLength(4));
+    for (const id of [root.id, next.id, other.id, third.id]) structured(await call(h.client, "indicate", { id }));
+    expect(fake.indicators).toHaveLength(4);
 
-    structured(await call(h.client, "reply", { id: next.id, body: "on it" }));
+    structured(await call(h.client, "reply", { id: later.id, body: "on it" }));
     await vi.waitFor(() => expect(indicated(root.id)).toEqual(["⏳", ""]));
     expect(indicated(next.id)).toEqual(["⏳", ""]);
     structured(await call(h.client, "react", { id: other.id, emoji: "👍" }));
@@ -251,20 +248,14 @@ describe("indicators through the tools", () => {
     const refused = await call(h.client, "indicate", { id: terminal.id });
     expect(refused.isError).toBe(true);
     expect(text(refused)).toContain("terminal");
+    fake.indicatorsSupported = false;
+    expect((await call(h.client, "indicate", { id: m.id })).isError).toBe(true);
     expect(registry.active(caller())).toEqual([]);
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "indicate")!;
     expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
     expect(tool.description).toContain("expires on its own");
-    expect(h.client.getInstructions()).toContain("indicate sets or clears a status explicitly");
-  });
-
-  it("never fails a read when the host has no indicators", async () => {
-    fake.indicatorsSupported = false;
-    const m = fake.seed({ from: BOB, to: [ALICE], topic: "t", data: "x" });
-    const r = structured<{ body: string }>(await call(h.client, "get_message", { id: m.id }));
-    expect(r.body).toBe("x");
-    await vi.waitFor(() => expect(fake.requests.filter((q) => q.path.endsWith("/indicate"))).toHaveLength(1));
-    await vi.waitFor(() => expect(registry.active(caller())).toEqual([]));
+    expect(h.client.getInstructions()).toContain("indicate can show the other participants a status such as ⏳");
+    expect(h.client.getInstructions()).toContain("an empty emoji clears it");
   });
 });
 
@@ -276,8 +267,8 @@ describe("indicator lifetime", () => {
   it("a stdio-shaped server clears its indicators when the session closes", async () => {
     const h = await connectInMemory(fake);
     const m = fake.seed({ from: BOB, to: [ALICE], topic: "t", data: "x" });
-    structured(await call(h.client, "get_message", { id: m.id }));
-    await vi.waitFor(() => expect(fake.indicators).toHaveLength(1));
+    structured(await call(h.client, "indicate", { id: m.id }));
+    expect(fake.indicators).toHaveLength(1);
     await h.close();
     await vi.waitFor(() => expect(fake.indicators.map((i) => i.emoji)).toEqual(["⏳", ""]));
   });
@@ -286,20 +277,20 @@ describe("indicator lifetime", () => {
     const shutdown = new AbortController();
     const h = await connectInMemory(fake, "fmsgk_alice_secret", {}, { shutdown: shutdown.signal });
     const m = fake.seed({ from: BOB, to: [ALICE], topic: "t", data: "x" });
-    structured(await call(h.client, "get_message", { id: m.id }));
-    await vi.waitFor(() => expect(fake.indicators).toHaveLength(1));
+    structured(await call(h.client, "indicate", { id: m.id }));
+    expect(fake.indicators).toHaveLength(1);
     shutdown.abort();
     await vi.waitFor(() => expect(fake.indicators.map((i) => i.emoji)).toEqual(["⏳", ""]));
     await h.close();
     expect(fake.indicators).toHaveLength(2);
   });
 
-  it("HTTP-shaped servers share indicators across requests, so a later reply clears ⏳", async () => {
+  it("HTTP-shaped servers share indicators across requests, so a later reply clears it", async () => {
     const provider = new StaticCallerProvider(new FmsgClient(fake.baseUrl, "fmsgk_alice_secret"));
     const h = await connectHttpShaped(fake, provider, undefined);
     try {
       const m = fake.seed({ from: BOB, to: [ALICE], topic: "t", data: "x" });
-      structured(await call(h.client, "get_message", { id: m.id }));
+      structured(await call(h.client, "indicate", { id: m.id }));
       await sleep(50);
       expect(fake.indicators.map((i) => i.emoji)).toEqual(["⏳"]);
       structured(await call(h.client, "reply", { id: m.id, body: "done" }));
