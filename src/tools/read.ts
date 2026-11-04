@@ -197,7 +197,7 @@ export const registerReadTools: Register = (server, deps) => {
         marked: z.array(outputObject({ id: z.string(), time_read: z.string().nullable() })),
         failed: z.array(outputObject({ id: z.string(), error: z.string() })),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ ids }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Mailbox tools set `openWorldHint: false` (inbox, threads, drafts, mark read, attachment URLs).
+  `react` is `destructiveHint: true` because a reaction message cannot be recalled. Sends to other
+  addresses stay open-world and destructive.
 - FMSG-006 indicators. The new `indicate` tool shows the other participants of a message a short-lived
   status such as ⏳ or ✍️, refreshed at half its ttl (every 1–30 s) and cleared when the agent replies in
   that thread, reacts, marks it read, after 5 minutes, or when the session ends; an empty emoji clears it

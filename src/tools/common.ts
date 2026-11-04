@@ -24,7 +24,10 @@ export type ToolDeps = {
   indicators: IndicatorRegistry;
 };
 
-export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+// Mailbox reads stay inside the signed-in address, so openWorldHint is false.
+// Hosts that treat open-world tools as reaching arbitrary other parties otherwise
+// flag an inbox read. SENDS stays open-world: a send can reach any fmsg address.
+export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 export const SENDS: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
 
 export const idSchema = z.string().regex(/^[0-9]+$/u, "fmsg message ids are decimal integers").describe("fmsg message id");
