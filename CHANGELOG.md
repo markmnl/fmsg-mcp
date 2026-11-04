@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `send_message`, `reply` and `create_draft` take `files`: files the user shared in the chat, given by
+  reference (ChatGPT's `openai/fileParams`, declared in each tool's `_meta`). The server downloads each
+  one, from public HTTPS addresses only, hashes it, attaches the exact bytes and reports its sha256 in
+  the result's `files`. ChatGPT can now send images and PDFs, which its sandbox could not upload.
+  New settings: `FMSG_MCP_FILE_HOSTS`, `FMSG_MCP_MAX_FILE_BYTES`.
 - `react` is non-destructive again (`destructiveHint: false`), reversing 1.4.1: a reaction is one emoji
   its sender changes or clears with another reaction, and it alters no one's messages, so hosts needn't
   ask before each one.

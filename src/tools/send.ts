@@ -7,7 +7,8 @@ import type { Caller } from "../context.js";
 import { toolError } from "../errors.js";
 import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
-import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, prepareAttachments, sendWithAttachments } from "./attachments.js";
+import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, hostFilesResult, prepareAllAttachments, sendWithAttachments } from "./attachments.js";
+import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { parentReference, replyParent } from "./parent.js";
 import { WORKING_EMOJI } from "../indicators.js";
@@ -102,6 +103,8 @@ export const sentOutput = outputObject({
   topic: z.string(),
   parent_id: z.string().nullable(),
   attachments: z.array(attachmentItem).describe("sorted by filename, the same order in every tool"),
+  files: z.array(outputObject({ file_id: z.string().optional(), filename: z.string().optional(), size: z.number().optional(), sha256: z.string().optional() })).optional()
+    .describe("the files given by reference, as attached: the name used, size and hex sha256 of the bytes"),
   redactions: z.number().describe("secrets replaced with placeholders before sending"),
   redacted: z.array(z.string()).optional().describe("the kinds of secret replaced, such as github_token; empty when none"),
   resolved: resolvedOutput,
@@ -148,15 +151,17 @@ export const registerSendTools: Register = (server, deps) => {
         no_reply: z.boolean().default(false).describe(NO_REPLY),
         ...includeOwner,
         attachments,
+        files: hostFilesInput,
       }),
       outputSchema: sentOutput,
       annotations: SENDS,
+      _meta: HOST_FILE_META,
     },
-    async ({ to, topic, body, type, important, no_reply, include_owner, attachments }, ctx) =>
+    async ({ to, topic, body, type, important, no_reply, include_owner, attachments, files }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const { to: resolvedTo, resolved } = resolveRecipients(to, resolverFor(deps, caller));
         const recipients = withOwner(caller, resolvedTo, include_owner);
-        const outbound = await prepareAttachments(attachments, deps.config);
+        const { prepared: outbound, hostFiles } = await prepareAllAttachments(attachments, files, deps.config, deps.hostTransport, signal);
         const hint = base64Hint(attachments, routes);
         const sent = await sendWithAttachments(caller.client, { to: recipients, topic, body, type, important, noReply: no_reply }, outbound, signal);
         const structured = {
@@ -167,6 +172,7 @@ export const registerSendTools: Register = (server, deps) => {
           topic: sent.topic,
           parent_id: null,
           attachments: sentAttachments(sent.attachments, outbound),
+          ...(hostFiles.length ? { files: hostFilesResult(hostFiles) } : {}),
           redactions: sent.redactions,
           redacted: sent.redacted,
           ...(resolved.length ? { resolved } : {}),
@@ -201,11 +207,13 @@ export const registerSendTools: Register = (server, deps) => {
         allow_no_reply: z.boolean().default(false).describe("reply even though the parent asked for no replies"),
         ...includeOwner,
         attachments,
+        files: hostFilesInput,
       }),
       outputSchema: sentOutput,
       annotations: SENDS,
+      _meta: HOST_FILE_META,
     },
-    async ({ id, body, recipients, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) =>
+    async ({ id, body, recipients, type, important, no_reply, allow_no_reply, include_owner, attachments, files }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const parent = await replyParent(caller, id, signal);
         if ("content" in parent) return parent;
@@ -213,7 +221,7 @@ export const registerSendTools: Register = (server, deps) => {
         if ("content" in target) return target;
         const { resolved } = target;
         const to = withOwner(caller, target.to, include_owner);
-        const outbound = await prepareAttachments(attachments, deps.config);
+        const { prepared: outbound, hostFiles } = await prepareAllAttachments(attachments, files, deps.config, deps.hostTransport, signal);
         const hint = base64Hint(attachments, routes);
         const sent = await sendWithAttachments(caller.client, { to, ...parentReference(caller, parent), body, type, important, noReply: no_reply }, outbound, signal);
         // The reply is already sent: a failed root lookup only leaves the topic unknown.
@@ -227,6 +235,7 @@ export const registerSendTools: Register = (server, deps) => {
           topic: "",
           parent_id: parent.id,
           attachments: sentAttachments(sent.attachments, outbound),
+          ...(hostFiles.length ? { files: hostFilesResult(hostFiles) } : {}),
           redactions: sent.redactions,
           redacted: sent.redacted,
           ...(resolved.length ? { resolved } : {}),

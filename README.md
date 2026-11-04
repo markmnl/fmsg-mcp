@@ -214,6 +214,8 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_MCP_DOWNLOAD_DIR` | — | Enable `save_attachment` in stdio; folder for new files named from message ID and filename |
 | `FMSG_MCP_UPLOAD_DIR` | — | Allow attachment `path` arguments in stdio: files in this folder (or below it) are read by the server instead of written out by the model |
 | `FMSG_MCP_WAIT_MAX_SECONDS` | `230` | Cap on one `wait_for_message` call |
+| `FMSG_MCP_FILE_HOSTS` | any public host | Comma list of host names (or parent domains) that [files given by reference](#files-given-by-reference) may be downloaded from |
+| `FMSG_MCP_MAX_FILE_BYTES` | `20971520` (20 MiB) | Size limit for one file given by reference |
 | `FMSG_MCP_STATE_SECRET` | per-process random | At least 32 bytes; HMAC key for presigned links. Links still work only on the instance that issued them |
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
 | `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
@@ -268,6 +270,26 @@ with `x-content-sha256`), then `send_draft`; see
 [attachment uploads](docs/http-deployment.md#attachment-uploads). Send files as they are: fmsg
 compresses message bodies and attachments itself when it sends them.
 
+#### Files given by reference
+
+`send_message`, `reply` and `create_draft` also take `files`: files the user shared in the chat,
+which the host fills in and the server downloads itself. This is ChatGPT's
+[`openai/fileParams`](https://developers.openai.com/apps-sdk/reference): each of the three tools
+declares `_meta["openai/fileParams"]: ["files"]`, and ChatGPT passes each file as
+`{ download_url, file_id, mime_type?, file_name? }`. The bytes never pass through the model, and the
+model needs no HTTP access of its own (ChatGPT's sandbox has none). Other hosts ignore the field.
+
+- Only `https` URLs, with no credentials in them, and at most 3 redirects. Every hop must resolve to a
+  public address: loopback, private, link-local (including cloud metadata), CGNAT, multicast and
+  reserved addresses are refused, and the connection goes to the address that was checked.
+  `FMSG_MCP_FILE_HOSTS` narrows the allowed hosts further.
+- Each file is limited to `FMSG_MCP_MAX_FILE_BYTES` and 30 seconds.
+- The name is the host's `file_name` made safe (letters, digits, dot, underscore, hyphen; `file.<ext>`
+  from the type when there is none), renamed `name-2.ext` on a clash.
+- The bytes are hashed as they download. The upload is checked against that sha256, and the result's
+  `files` lists each file's `file_id`, name, size and `sha256`.
+- Every file is downloaded before a draft is created, so one that fails leaves nothing behind.
+
 Hosts that cannot attach the connection's credentials to their own HTTP requests can still keep file
 bytes out of the model. `get_attachment_upload_url` returns a single-use, 5-minute link per draft
 file, bound to its size and sha256, with a ready-to-run `curl` command. `get_attachment_download_url`
@@ -280,7 +302,7 @@ routes the running server offers. A model that writes a large file as base64 alt
 route exists gets a `hint` in the result naming it. The `send_file` prompt walks through the best
 route. The upload URL needs a host that can send the MCP connection's credentials with its own
 HTTP requests: scripts, SDK clients, and coding agents given an fmsg API key. Chat hosts usually
-cannot, so for them `data_text` and `data_base64` remain the routes.
+cannot; ChatGPT uses `files`, and for others `data_text` and `data_base64` remain the routes.
 
 The Web API already transfers attachments as raw bytes. Base64 is used only when embedding binary
 content in MCP's JSON results, as required by [MCP binary resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources#binary-content).

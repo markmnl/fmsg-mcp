@@ -1,3 +1,4 @@
+import type { HostTransport } from "./host-files.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { Config } from "./config.js";
 import type { CallerProvider } from "./context.js";
@@ -37,6 +38,8 @@ export type CreateServerOptions = {
    * (stdio).
    */
   indicators?: IndicatorRegistry;
+  /** Fetches files given by reference (tests substitute it). */
+  hostTransport?: HostTransport;
 };
 
 /**
@@ -64,6 +67,7 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   const deps: ToolDeps = {
     provider, config, ...(includeOwner ? { includeOwner } : {}), ...(options.shutdown ? { shutdown: options.shutdown } : {}),
     ...(options.links ? { links: options.links } : {}), indicators,
+    ...(options.hostTransport ? { hostTransport: options.hostTransport } : {}),
   };
   registerIdentityTools(server, deps);
   registerListTools(server, deps);
