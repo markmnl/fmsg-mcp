@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_FILE_BYTES } from "./host-files.js";
 import { readFileSync } from "node:fs";
 import { CALLER_DOMAIN, normalizeFmsgAddress } from "./address.js";
 import { normalizeApiUrl, normalizeOrigin } from "./client/url.js";
@@ -45,6 +46,10 @@ export type Config = {
   uploadDir?: string;
   /** Hard cap on a single wait_for_message call. */
   waitMaxSeconds: number;
+  /** Host names (or parent domains) files given by reference may be downloaded from; empty allows any public host. */
+  fileHosts?: string[];
+  /** Byte limit for one file given by reference. */
+  maxFileBytes?: number;
   http: HttpConfig;
   oauth?: OAuthConfig;
 };
@@ -175,6 +180,8 @@ export function loadConfig(
     ...(transport === "stdio" && env.FMSG_MCP_DOWNLOAD_DIR?.trim() ? { downloadDir: env.FMSG_MCP_DOWNLOAD_DIR.trim() } : {}),
     ...(transport === "stdio" && env.FMSG_MCP_UPLOAD_DIR?.trim() ? { uploadDir: env.FMSG_MCP_UPLOAD_DIR.trim() } : {}),
     waitMaxSeconds: intEnv(env, "FMSG_MCP_WAIT_MAX_SECONDS", DEFAULT_WAIT_MAX_SECONDS),
+    fileHosts: listEnv(env, "FMSG_MCP_FILE_HOSTS"),
+    maxFileBytes: intEnv(env, "FMSG_MCP_MAX_FILE_BYTES", DEFAULT_MAX_FILE_BYTES),
     http: {
       host,
       port,

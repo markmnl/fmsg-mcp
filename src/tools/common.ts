@@ -1,3 +1,4 @@
+import type { HostTransport } from "../host-files.js";
 import type { CallToolResult, McpServer, ServerContext, ToolAnnotations } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import type { AddressResolver } from "../address.js";
@@ -22,6 +23,8 @@ export type ToolDeps = {
   links?: PresignedLinks;
   /** FMSG-006 indicators the caller sets with the indicate tool, kept up until replied, handled or cleared. */
   indicators: IndicatorRegistry;
+  /** Fetches files given by reference; the public-HTTPS transport when omitted. */
+  hostTransport?: HostTransport;
 };
 
 // Mailbox reads stay inside the signed-in address, so openWorldHint is false.

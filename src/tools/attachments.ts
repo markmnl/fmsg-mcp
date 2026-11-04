@@ -9,6 +9,7 @@ import type { Attachment, DraftInput, DraftResult } from "../client/types.js";
 import type { Config } from "../config.js";
 import { downloadBaseUrl } from "../download.js";
 import { attachmentType } from "../render.js";
+import { DEFAULT_MAX_FILE_BYTES, type HostFile, type HostFileArgs, type HostTransport, prepareHostFiles } from "../host-files.js";
 
 export const FILENAME = /^[A-Za-z0-9._-]+$/u;
 const SHA256 = /^[0-9A-Fa-f]{64}$/u;
@@ -82,7 +83,7 @@ export function attachmentInput(config: Config, routes: FileRoutes = fileRoutes(
 export type AttachmentArgs = { filename: string; data_base64?: string; data_text?: string; path?: unknown; content_type?: string; sha256?: string };
 
 /** A validated attachment ready to upload: bytes in memory, or a file to stream. */
-export type PreparedAttachment = { filename: string; contentType: string; sha256?: string } & ({ data: Uint8Array } | { file: string });
+export type PreparedAttachment = { filename: string; contentType: string; sha256?: string; verify?: boolean } & ({ data: Uint8Array } | { file: string });
 
 /**
  * Decode base64 strictly: one alphabet (standard, or URL-safe with - and _) plus whitespace, `=` padding only at the
@@ -158,8 +159,15 @@ export async function prepareAttachments(items: AttachmentArgs[] | undefined, co
 export async function uploadPrepared(client: FmsgClient, draftId: string, prepared: PreparedAttachment[], signal: AbortSignal): Promise<Attachment[]> {
   const uploaded: Attachment[] = [];
   for (const a of prepared) {
-    if ("data" in a) {
+    if ("data" in a && !(a.verify && a.sha256)) {
       uploaded.push(await client.uploadAttachment(draftId, { filename: a.filename, data: a.data, contentType: a.contentType }, signal));
+    } else if ("data" in a) {
+      // A downloaded file: the host checks the bytes it stores against the hash taken while downloading.
+      const stream = Readable.toWeb(Readable.from([Buffer.from(a.data)])) as ReadableStream<Uint8Array>;
+      const { filename, size } = await client.uploadAttachmentStream(draftId, {
+        filename: a.filename, stream, contentType: a.contentType, expectedSha256: a.sha256!,
+      }, signal);
+      uploaded.push({ filename, size });
     } else {
       const stream = Readable.toWeb(createReadStream(a.file)) as ReadableStream<Uint8Array>;
       const { filename, size } = await client.uploadAttachmentStream(draftId, {
@@ -191,4 +199,26 @@ export async function sendWithAttachments(client: FmsgClient, input: DraftInput,
     await client.deleteMessage(draft.id).catch(() => undefined);
     throw error;
   }
+}
+
+/** What a send or draft tool attaches: its inline attachments, then the files the host gave by reference. */
+export async function prepareAllAttachments(
+  items: AttachmentArgs[] | undefined, files: HostFileArgs[] | undefined, config: Config, transport: HostTransport | undefined, signal: AbortSignal,
+): Promise<{ prepared: PreparedAttachment[]; hostFiles: HostFile[] }> {
+  const prepared = await prepareAttachments(items, config);
+  const taken = new Set(prepared.map((a) => a.filename.toLowerCase()));
+  const hostFiles = await prepareHostFiles(files, {
+    maxBytes: config.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
+    allowedHosts: config.fileHosts ?? [],
+    ...(transport ? { transport } : {}),
+  }, signal, taken);
+  return {
+    prepared: [...prepared, ...hostFiles.map((f) => ({ filename: f.filename, contentType: f.contentType, data: f.data, sha256: f.sha256, verify: true }))],
+    hostFiles,
+  };
+}
+
+/** The files given by reference as they were attached, for the tool result. */
+export function hostFilesResult(files: HostFile[]): Array<{ file_id: string; filename: string; size: number; sha256: string }> {
+  return files.map((f) => ({ file_id: f.fileId, filename: f.filename, size: f.data.byteLength, sha256: f.sha256 }));
 }

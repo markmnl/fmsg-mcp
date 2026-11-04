@@ -4,7 +4,8 @@ import { toolError } from "../errors.js";
 import { withOwner } from "../owner.js";
 import { addressList, headerValue, isoTime } from "../render.js";
 import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../upload.js";
-import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, prepareAttachments } from "./attachments.js";
+import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, hostFilesResult, prepareAllAttachments } from "./attachments.js";
+import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { type ParentReference, parentReference, replyParent } from "./parent.js";
 import { threadRoot } from "./read.js";
@@ -38,6 +39,7 @@ export const registerDraftTools: Register = (server, deps) => {
         allow_no_reply: z.boolean().default(false).describe("draft a reply even though the parent asked for no replies"),
         ...includeOwner,
         attachments: z.array(attachmentInput(deps.config)).optional().describe("files to attach now"),
+        files: hostFilesInput,
       }),
       outputSchema: outputObject({
         draft_id: z.string(),
@@ -45,6 +47,8 @@ export const registerDraftTools: Register = (server, deps) => {
         topic: z.string(),
         parent_id: z.string().nullable(),
         attachments: z.array(attachmentItem).describe("sorted by filename, the same order in every tool"),
+        files: z.array(outputObject({ file_id: z.string().optional(), filename: z.string().optional(), size: z.number().optional(), sha256: z.string().optional() })).optional()
+          .describe("the files given by reference, as attached: the name used, size and hex sha256 of the bytes"),
         redactions: z.number().describe("secrets replaced with placeholders in the draft"),
         redacted: z.array(z.string()).describe("the kinds of secret replaced; empty when none"),
         resolved: resolvedOutput,
@@ -60,8 +64,9 @@ export const registerDraftTools: Register = (server, deps) => {
         hint: hintOutput,
       }),
       annotations: { ...SENDS, destructiveHint: false, openWorldHint: false },
+      _meta: HOST_FILE_META,
     },
-    async ({ to, topic, reply_to, body, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) => {
+    async ({ to, topic, reply_to, body, type, important, no_reply, allow_no_reply, include_owner, attachments, files }, ctx) => {
       if (reply_to && topic) return toolError("a reply has no topic: pass topic only for a new message");
       if (!reply_to && !to?.length) return toolError("pass to: the recipients (or reply_to to draft a reply)");
       return withCaller(deps, ctx, async (caller, signal) => {
@@ -79,7 +84,7 @@ export const registerDraftTools: Register = (server, deps) => {
           ({ to: recipients, resolved } = resolveRecipients(to!, resolverFor(deps, caller)));
         }
         recipients = withOwner(caller, recipients, include_owner);
-        const outbound = await prepareAttachments(attachments, deps.config);
+        const { prepared: outbound, hostFiles } = await prepareAllAttachments(attachments, files, deps.config, deps.hostTransport, signal);
         const hint = base64Hint(attachments, routes);
         const draft = await draftWithAttachments(caller.client, {
           to: recipients, body, type, important, noReply: no_reply, ...(parentRef ?? { topic: topic ?? "" }),
@@ -100,6 +105,7 @@ export const registerDraftTools: Register = (server, deps) => {
           topic: draft.topic,
           parent_id: pid ?? null,
           attachments: sentAttachments(draft.attachments, outbound),
+          ...(hostFiles.length ? { files: hostFilesResult(hostFiles) } : {}),
           redactions: draft.redactions,
           redacted: draft.redacted,
           ...(resolved.length ? { resolved } : {}),
