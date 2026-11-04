@@ -62,7 +62,7 @@ describe("tools (stdio-shaped)", () => {
     expect(tools.find((t) => t.name === "mark_read")!.annotations?.openWorldHint).toBe(false);
     expect(tools.find((t) => t.name === "create_draft")!.annotations?.openWorldHint).toBe(false);
     expect(tools.find((t) => t.name === "delete_draft")!.annotations?.openWorldHint).toBe(false);
-    expect(tools.find((t) => t.name === "react")!.annotations?.destructiveHint).toBe(true);
+    expect(tools.find((t) => t.name === "react")!.annotations?.destructiveHint).toBe(false);
     expect(tools.find((t) => t.name === "indicate")!.annotations?.destructiveHint).toBe(false);
   });
 

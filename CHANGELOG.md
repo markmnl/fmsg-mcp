@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `react` is non-destructive again (`destructiveHint: false`), reversing 1.4.1: a reaction is one emoji
+  its sender changes or clears with another reaction, and it alters no one's messages, so hosts needn't
+  ask before each one.
 - Mailbox tools set `openWorldHint: false` (inbox, threads, drafts, mark read, attachment URLs).
   `react` is `destructiveHint: true` because a reaction message cannot be recalled, so a host may ask
   before one. `indicate` stays non-destructive. Sends to other addresses stay open-world and destructive.

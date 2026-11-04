@@ -285,8 +285,10 @@ export const registerSendTools: Register = (server, deps) => {
         emoji: z.string().max(32).nullable().describe("a single emoji; null or empty clears your reaction"),
       }),
       outputSchema: outputObject({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
-      // A reaction is itself a message and cannot be recalled, so it stays destructive.
-      annotations: { ...SENDS, idempotentHint: true },
+      // Not destructive: a reaction is one emoji that its sender changes or
+      // clears with another reaction, and it alters no one's messages, so hosts
+      // needn't ask before each one (maintainer decision).
+      annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
     },
     async ({ id, emoji }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
