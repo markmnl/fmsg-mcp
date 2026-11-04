@@ -54,8 +54,16 @@ describe("tools (stdio-shaped)", () => {
     ]);
     const send = tools.find((t) => t.name === "send_message")!;
     expect(send.annotations?.destructiveHint).toBe(true);
+    expect(send.annotations?.openWorldHint).toBe(true);
     expect(send.description).toContain("immutable");
-    expect(tools.find((t) => t.name === "get_thread")!.annotations?.readOnlyHint).toBe(true);
+    const thread = tools.find((t) => t.name === "get_thread")!;
+    expect(thread.annotations?.readOnlyHint).toBe(true);
+    expect(thread.annotations?.openWorldHint).toBe(false);
+    expect(tools.find((t) => t.name === "mark_read")!.annotations?.openWorldHint).toBe(false);
+    expect(tools.find((t) => t.name === "create_draft")!.annotations?.openWorldHint).toBe(false);
+    expect(tools.find((t) => t.name === "delete_draft")!.annotations?.openWorldHint).toBe(false);
+    expect(tools.find((t) => t.name === "react")!.annotations?.destructiveHint).toBe(true);
+    expect(tools.find((t) => t.name === "indicate")!.annotations?.destructiveHint).toBe(false);
   });
 
   it("whoami and resolve_address", async () => {

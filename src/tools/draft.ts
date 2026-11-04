@@ -59,7 +59,7 @@ export const registerDraftTools: Register = (server, deps) => {
         next: z.string(),
         hint: hintOutput,
       }),
-      annotations: { ...SENDS, destructiveHint: false },
+      annotations: { ...SENDS, destructiveHint: false, openWorldHint: false },
     },
     async ({ to, topic, reply_to, body, type, important, no_reply, allow_no_reply, include_owner, attachments }, ctx) => {
       if (reply_to && topic) return toolError("a reply has no topic: pass topic only for a new message");
@@ -163,7 +163,7 @@ export const registerDraftTools: Register = (server, deps) => {
       description: "Delete an unsent draft and its attachments. Sent messages cannot be deleted.",
       inputSchema: z.strictObject({ id: idSchema.describe("the draft to delete") }),
       outputSchema: outputObject({ id: z.string(), deleted: z.boolean() }),
-      annotations: { ...SENDS, idempotentHint: true },
+      annotations: { ...SENDS, idempotentHint: true, openWorldHint: false },
     },
     async ({ id }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {

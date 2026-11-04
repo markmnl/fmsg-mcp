@@ -103,7 +103,7 @@ export const registerDownloadTool: Register = (server, deps) => {
       content_type: z.string().regex(/^[\x20-\x7e]+$/u).optional().describe("inferred from the filename when omitted"),
     }),
     outputSchema: outputObject({ draft_id: z.string(), filename: z.string(), ...presignedOutput.shape }),
-    annotations: { ...SENDS, destructiveHint: false },
+    annotations: { ...SENDS, destructiveHint: false, openWorldHint: false },
   }, async ({ id, filename, size, sha256, content_type }, ctx) => withCaller(deps, ctx, async (caller, signal) => {
     const draft = await caller.client.getMessage(id, signal);
     if (draft.time !== null && draft.time !== undefined) return toolError(`message ${draft.id} was already sent; files can be added only to drafts`);
