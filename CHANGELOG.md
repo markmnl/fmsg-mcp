@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Tool annotations follow OpenAI's plugin guidelines ("false only for additive writes without
+  destructive or irreversible effects"), after a directory review flagged them: `react`, `indicate`
+  and `mark_read` are `destructiveHint: true` (a reaction or status reaches the other participants at
+  once and supersedes the previous one; marking read can't be undone here), so a host may ask before
+  each. `get_attachment_download_url` is no longer `readOnlyHint` (its presigned link is created on the
+  server); it still needs only `fmsg:read`.
 - `send_message`, `reply` and `create_draft` take `files`: files the user shared in the chat, given by
   reference (ChatGPT's `openai/fileParams`, declared in each tool's `_meta`). The server downloads each
   one, from public HTTPS addresses only, hashes it, attaches the exact bytes and reports its sha256 in

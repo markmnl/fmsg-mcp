@@ -197,7 +197,10 @@ export const registerReadTools: Register = (server, deps) => {
         marked: z.array(outputObject({ id: z.string(), time_read: z.string().nullable() })),
         failed: z.array(outputObject({ id: z.string(), error: z.string() })),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      // Destructive (OpenAI's plugin guidelines): marking read changes the
+      // messages' read state, which this server cannot undo. Closed-world:
+      // only the caller's own mailbox.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async ({ ids }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {

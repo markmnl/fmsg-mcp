@@ -46,7 +46,7 @@ describe("authenticated binary attachment downloads", () => {
     const message = seed(filename, bytes);
     const client = await connect();
     const advertised = (await client.listTools()).tools.find(t => t.name === "get_attachment_download_url");
-    expect(advertised?.annotations?.readOnlyHint).toBe(true);
+    expect(advertised?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     const result = await call(client, "get_attachment_download_url", { id: message.id, filename });
     const data = structured<{ download_url: string; size: number }>(result);
     expect(data).toMatchObject({ id: message.id, size: bytes.length, authentication: "bearer" });
