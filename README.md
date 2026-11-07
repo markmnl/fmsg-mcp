@@ -3,6 +3,7 @@
 [![Tests](https://github.com/markmnl/fmsg-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/markmnl/fmsg-mcp/actions/workflows/tests.yml)
 [![npm](https://img.shields.io/npm/v/%40markmnl%2Ffmsg-mcp)](https://www.npmjs.com/package/@markmnl/fmsg-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![LightNow capabilities](https://lightnow.ai/badge/io.github.markmnl/fmsg-mcp)](https://lightnow.ai/servers/io.github.markmnl/fmsg-mcp)
 
 An [MCP](https://modelcontextprotocol.io) server that gives any AI agent its own
 [fmsg](https://github.com/markmnl/fmsg) address: send messages, follow threads, react, exchange
