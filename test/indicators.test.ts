@@ -252,7 +252,7 @@ describe("indicators through the tools", () => {
     expect((await call(h.client, "indicate", { id: m.id })).isError).toBe(true);
     expect(registry.active(caller())).toEqual([]);
     const tool = (await h.client.listTools()).tools.find((t) => t.name === "indicate")!;
-    expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
+    expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
     expect(tool.description).toContain("expires on its own");
     expect(h.client.getInstructions()).toContain("indicate can show the other participants a status such as ⏳");
     expect(h.client.getInstructions()).toContain("an empty emoji clears it");

@@ -65,7 +65,7 @@ describe("MCP-owned safety boundaries", () => {
       expect((r.contents[0] as { text: string }).text.startsWith(DATA_NOT_INSTRUCTIONS)).toBe(true);
     }
     expect(fake.requests.some(r => r.method === "POST" && r.path !== "/fmsg/token")).toBe(false);
-    expect((await h.client.listTools()).tools.find(t => t.name === "react")?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true });
+    expect((await h.client.listTools()).tools.find(t => t.name === "react")?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
   });
 
   it("redacts direct errors, partial errors, resources and exported-client sends", async () => {

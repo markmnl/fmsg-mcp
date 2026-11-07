@@ -163,8 +163,11 @@ describe("HTTP OAuth", () => {
     for (const tool of tools) {
       expect(Object.hasOwn(TOOL_SCOPES, tool.name)).toBe(true);
       const scopes = TOOL_SCOPES[tool.name]!;
-      expect(scopes).toContain(tool.annotations?.readOnlyHint ? "fmsg:read" : "fmsg:write");
-      const token = await idp.token({ scope: tool.annotations?.readOnlyHint ? "fmsg:write" : "fmsg:read" });
+      // get_attachment_download_url only reads, but isn't read-only: its
+      // presigned link is created on the server.
+      const reads = tool.annotations?.readOnlyHint || tool.name === "get_attachment_download_url";
+      expect(scopes).toContain(reads ? "fmsg:read" : "fmsg:write");
+      const token = await idp.token({ scope: reads ? "fmsg:write" : "fmsg:read" });
       const response = await post(token, "tools/call", { name: tool.name, arguments: {} });
       expect(response.status, tool.name).toBe(403);
       expect(response.headers.get("www-authenticate")).toContain(`scope="${scopes.join(" ")}"`);

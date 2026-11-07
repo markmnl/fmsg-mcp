@@ -294,10 +294,11 @@ export const registerSendTools: Register = (server, deps) => {
         emoji: z.string().max(32).nullable().describe("a single emoji; null or empty clears your reaction"),
       }),
       outputSchema: outputObject({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
-      // Not destructive: a reaction is one emoji that its sender changes or
-      // clears with another reaction, and it alters no one's messages, so hosts
-      // needn't ask before each one (maintainer decision).
-      annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
+      // Destructive (OpenAI's plugin guidelines): a reaction is a send the
+      // other participants receive at once and cannot be recalled, and it
+      // supersedes the sender's previous reaction. Earlier reaction messages
+      // stay; setting the same emoji again is a no-op.
+      annotations: { ...SENDS, idempotentHint: true },
     },
     async ({ id, emoji }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
@@ -327,7 +328,9 @@ export const registerSendTools: Register = (server, deps) => {
         ttl: z.number().describe("seconds; 0 when cleared"),
         cleared: z.boolean(),
       }),
-      annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
+      // Destructive (OpenAI's plugin guidelines): the status is shown to the
+      // other participants at once and replaces the caller's previous one.
+      annotations: { ...SENDS, idempotentHint: true },
     },
     async ({ id, emoji, ttl }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
