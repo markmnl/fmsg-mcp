@@ -216,7 +216,10 @@ attach resources; prompts `chat` and `reply` script the wait → reply loop and 
 | `FMSG_MCP_WAIT_MAX_SECONDS` | `230` | Cap on one `wait_for_message` call |
 | `FMSG_MCP_FILE_HOSTS` | any public host | Comma list of host names (or parent domains) that [files given by reference](#files-given-by-reference) may be downloaded from |
 | `FMSG_MCP_MAX_FILE_BYTES` | `20971520` (20 MiB) | Size limit for one file given by reference |
-| `FMSG_MCP_STATE_SECRET` | per-process random | At least 32 bytes; HMAC key for presigned links. Links still work only on the instance that issued them |
+| `FMSG_MCP_FILES_EXTENSION` | `on` (HTTP) | `off` stops offering the [file-uploads extension](#file-uploads-extension) |
+| `FMSG_MCP_FILES_MAX_INLINE_BYTES` / `FMSG_MCP_FILES_MAX_FILE_BYTES` | `1048576` / unset | The extension's `maxInlineBytes` (`0`: no inline files), and an optional limit on each file (`x-mcp-file` `maxSize`) |
+| `FMSG_MCP_FILES_TARGET_TTL_SECONDS` | `600` | How long the extension's upload targets accept a new upload |
+| `FMSG_MCP_STATE_SECRET` | per-process random | At least 32 bytes; HMAC key for presigned links and the extension's upload targets and `requestState`. Set the same value on every instance so any instance can serve another's upload retries; without it only the process that issued the targets can complete the call. Presigned links still work only on the instance that issued them |
 | `FMSG_MCP_HOST` / `FMSG_MCP_PORT` | `127.0.0.1` / `8765` | HTTP bind address (or `--http host:port`) |
 | `FMSG_MCP_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` header allowlist; required for non-loopback binds |
 | `FMSG_MCP_ALLOWED_ORIGINS` | same origin; loopback origins on loopback binds | Comma-separated browser origins including scheme and port; an explicit list replaces the loopback default; hostname-only values are rejected |
@@ -254,8 +257,8 @@ original Content-Type and download filename. No files are stored on the MCP serv
 `send_message`, `reply` and `create_draft` take each attachment as exactly one of:
 
 - `data_base64`: base64 written by the model. It passes through the model, so it is best effort: fine
-  for small files (verified exact up to 16 KB). Always pass `sha256` with it, and prefer `path` or a
-  presigned upload link for anything larger. The standard or URL-safe
+  for small files (verified exact up to 16 KB). Always pass `sha256` with it, and prefer `path`, a
+  presigned upload link or the file-uploads extension for anything larger. The standard or URL-safe
   alphabet is accepted, but not both in one value. Decoding is strict: any other character, a bad
   length or padding, or a stray ending is refused with the attachment's name, rather than sent as a
   corrupted file.
@@ -303,6 +306,23 @@ route exists gets a `hint` in the result naming it. The `send_file` prompt walks
 route. The upload URL needs a host that can send the MCP connection's credentials with its own
 HTTP requests: scripts, SDK clients, and coding agents given an fmsg API key. Chat hosts usually
 cannot; ChatGPT uses `files`, and for others `data_text` and `data_base64` remain the routes.
+
+### File-uploads extension
+
+Over HTTP, the server also implements the experimental
+[MCP file-uploads extension](https://github.com/modelcontextprotocol/experimental-ext-file-uploads)
+(`io.modelcontextprotocol/files`) for clients that support it. `server/discover` advertises it with
+`upload` and `maxInlineBytes`, and the `attachments` of `send_message`, `reply` and `create_draft` also
+accept FileInputs (`{id, name, mimeType, size, digest?, data?}`, marked `x-mcp-file`). `tools/list` shows
+them only to requests that declare the extension. A FileInput with `data` is checked against its size
+(and digest) and attached. For files without `data`, the call checks everything it can without the
+bytes, creates the draft, and answers `upload_required` with one target per file: a `PUT` to the path
+`/uploads/{token}` under the MCP address, with the connection's credential. A target takes one upload,
+only of the declared size (and digest), started within 10 minutes. The client then retries the same
+call with the echoed `requestState`. The server confirms each file in the draft and only then sends it
+(or returns the draft), at most once. Clients without the extension see no change. See
+[the implementation notes](docs/files-extension-notes.md) for the spec revision followed and the choices
+made where it is open.
 
 The Web API already transfers attachments as raw bytes. Base64 is used only when embedding binary
 content in MCP's JSON results, as required by [MCP binary resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources#binary-content).
