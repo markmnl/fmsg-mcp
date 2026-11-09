@@ -9,7 +9,7 @@ import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
 import { type FileRoutes, type HostFileResult, type PreparedAttachment, base64Hint, fileRoutes, sendWithAttachments } from "./attachments.js";
 import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
-import { attachmentsArgument, fileCall, prepareCall, resumed, typedAttachments } from "../files/tools.js";
+import { attachmentsArgument, fileCall, isPrepared, prepareCall, resumed, typedAttachments } from "../files/tools.js";
 import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { parentReference, replyParent } from "./parent.js";
 import { WORKING_EMOJI } from "../indicators.js";
@@ -239,7 +239,7 @@ export const registerSendTools: Register = (server, deps) => {
         const { to: resolvedTo, resolved } = resolveRecipients(to, resolverFor(deps, caller));
         const recipients = withOwner(caller, resolvedTo, include_owner);
         const call = await prepareCall(deps, upload, attachments, files, signal);
-        if ("content" in call) return call;
+        if (!isPrepared(call)) return call;
         const hint = base64Hint(call.classic, routes);
         const input = { to: recipients, topic, body, type, important, noReply: no_reply };
         if (call.kind === "uploads") {
@@ -293,7 +293,7 @@ export const registerSendTools: Register = (server, deps) => {
         const { resolved } = target;
         const to = withOwner(caller, target.to, include_owner);
         const call = await prepareCall(deps, upload, attachments, files, signal);
-        if ("content" in call) return call;
+        if (!isPrepared(call)) return call;
         const hint = base64Hint(call.classic, routes);
         const input = { to, ...parentReference(caller, parent), body, type, important, noReply: no_reply };
         if (call.kind === "uploads") {

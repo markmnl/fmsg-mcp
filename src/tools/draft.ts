@@ -6,7 +6,7 @@ import { addressList, headerValue, isoTime } from "../render.js";
 import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../upload.js";
 import { type HostFileResult, base64Hint, draftWithAttachments, fileRoutes } from "./attachments.js";
 import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
-import { attachmentsArgument, fileCall, prepareCall, resumed, typedAttachments } from "../files/tools.js";
+import { attachmentsArgument, fileCall, isPrepared, prepareCall, resumed, typedAttachments } from "../files/tools.js";
 import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { type ParentReference, parentReference, replyParent } from "./parent.js";
 import { threadRoot } from "./read.js";
@@ -139,7 +139,7 @@ export const registerDraftTools: Register = (server, deps) => {
         }
         recipients = withOwner(caller, recipients, include_owner);
         const call = await prepareCall(deps, upload, attachments, files, signal);
-        if ("content" in call) return call;
+        if (!isPrepared(call)) return call;
         const hint = base64Hint(call.classic, routes);
         const input = { to: recipients, body, type, important, noReply: no_reply, ...(parentRef ?? { topic: topic ?? "" }) };
         const pid = parentRef?.pid;

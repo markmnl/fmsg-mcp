@@ -2,23 +2,22 @@
  * The file-uploads flow for send_message, reply and create_draft.
  *
  * Initial call: every check that needs no bytes, then the fmsg draft is created as the staging location and inline
- * files are attached. If any file came without data, the call answers input_required with one upload target per
+ * files are attached. If any non-empty file came without data, the call answers upload_required with one target per
  * such file; the targets stream into that draft.
  *
- * Retry (same arguments, requestState, per-file outcomes): the outcomes are checked, each completed file is
- * confirmed in the draft against its declared size and digest, and only then does the tool finish (send the draft,
- * or return it for create_draft).
+ * Retry (same arguments and requestState): the server checks the state against the call, confirms each file in the
+ * draft against its declared size (and digest, if given), and only then finishes the tool: it sends the draft, or
+ * returns it for create_draft. A retry states that every upload succeeded, so a file that is not there ends the call.
  */
 import { createHash } from "node:crypto";
-import { type CallToolResult, type ServerContext, inputRequired } from "@modelcontextprotocol/server";
+import type { CallToolResult, ServerContext } from "@modelcontextprotocol/server";
 import { FmsgHttpError } from "../client/client.js";
-import type { Attachment, DraftInput, FmsgMessage } from "../client/types.js";
+import type { DraftInput, FmsgMessage } from "../client/types.js";
 import type { Caller } from "../context.js";
 import { toolError } from "../errors.js";
 import type { ToolResult } from "../tools/common.js";
-import { isoTime } from "../render.js";
 import { type PreparedAttachment, draftWithAttachments } from "../tools/attachments.js";
-import { type CheckedFile, type FileInput, UPLOADS_KEY, argumentsHash, checkFiles, clientDeclaresFiles, hexToBase64url } from "./extension.js";
+import { type CheckedFile, type FileInput, argumentsHash, checkFiles, declaresUpload, hexToBase64url } from "./extension.js";
 import type { FilesRuntime, PendingFile, RoundState } from "./runtime.js";
 
 /** How a tool finishes once every file is in its draft: `draft` is the draft as the host now lists it. */
@@ -30,7 +29,7 @@ export type FileCall = {
   caller: Caller;
   signal: AbortSignal;
   tool: string;
-  /** The tool's arguments as parsed; the retry must repeat them exactly. */
+  /** The tool's arguments as parsed; the retry must repeat them. */
   args: unknown;
 };
 
@@ -45,24 +44,26 @@ export function splitAttachments<T extends object>(items: Array<T | FileInput> |
   return { files, classic };
 }
 
-/** Inline FileInputs as attachments to upload with the draft. */
+/** FileInputs that came with their bytes (inline or empty), as attachments to upload with the draft. */
 export function inlineAttachments(files: CheckedFile[]): PreparedAttachment[] {
-  return files.filter((f) => f.data).map((f) => ({ filename: f.filename, contentType: f.mimeType, sha256: f.sha256, data: f.data! }));
+  return files.filter((f) => f.data).map((f) => ({ filename: f.filename, contentType: f.mimeType, sha256: f.sha256!, data: f.data! }));
 }
 
 /**
- * Check FileInputs for an initial call. Returns the checked files, or an error result when the metadata is refused
- * or when files without data cannot be uploaded on this request.
+ * Check FileInputs for an initial call. Returns the checked files, a tool error when the metadata is refused, or
+ * -32021 when files without data came on a request that did not declare `upload`.
  */
-export function checkInitialFiles(call: FileCall, inputs: FileInput[], classicNames: string[]): CheckedFile[] | CallToolResult {
+export function checkInitialFiles(call: FileCall, inputs: FileInput[], classicNames: string[]): CheckedFile[] | ToolResult {
   let files: CheckedFile[];
   try { files = checkFiles(inputs, call.runtime.config, classicNames); }
   catch (error) { return toolError(`${error instanceof Error ? error.message : String(error)}. Nothing was sent.`); }
   const pending = files.filter((f) => !f.data);
-  if (pending.length && !clientDeclaresFiles(call.ctx)) {
-    return toolError(`${pending.map((f) => JSON.stringify(f.id)).join(", ")} ${pending.length === 1 ? "has" : "have"} no data, and this request ` +
-      "did not declare the io.modelcontextprotocol/files extension, so no upload target can be issued. Include the file's data, " +
-      "or send it as filename with data_base64 or data_text. Nothing was sent.");
+  if (pending.length && !declaresUpload(call.ctx)) {
+    return call.runtime.missingUpload() ?? toolError(
+      `${pending.map((f) => JSON.stringify(f.id)).join(", ")} ${pending.length === 1 ? "has" : "have"} no data, and this request did not ` +
+      "declare upload support for the io.modelcontextprotocol/files extension. Include the file's data, or send it as filename with " +
+      "data_base64 or data_text. Nothing was sent.",
+    );
   }
   return files;
 }
@@ -76,47 +77,19 @@ export async function requestUploads(call: FileCall, input: DraftInput, inline: 
   const draft = await draftWithAttachments(caller.client, input, inline, signal);
   try {
     const { round, exp } = runtime.newRound(caller, draft.id);
-    const files: PendingFile[] = pending.map((f) => ({ id: f.id, filename: f.filename, size: f.size, sha256: f.sha256, mimeType: f.mimeType }));
+    const files: PendingFile[] = pending.map((f) => ({ id: f.id, filename: f.filename, size: f.size, ...(f.sha256 ? { sha256: f.sha256 } : {}), mimeType: f.mimeType }));
     const state: RoundState = {
-      v: 1, tool: call.tool, args: argumentsHash(call.args), address: caller.address.toLowerCase(), draft: draft.id, round, exp, files,
+      v: 2, tool: call.tool, args: argumentsHash(call.args), address: caller.address.toLowerCase(), draft: draft.id, round, exp, files,
       summary: { ...summary, redactions: draft.redactions, redacted: draft.redacted },
     };
     const requestState = await runtime.codec.mint(state, call.ctx);
-    if (!runtime.offer(requestState, runtime.uploadRequest(state))) throw new Error("this transport cannot deliver upload requests; send the files inline");
-    return inputRequired({ requestState });
+    const result = runtime.requestUploads(runtime.uploadRequest(state, requestState));
+    if (!result) throw new Error("this transport cannot deliver upload requests; send the files inline");
+    return result;
   } catch (error) {
     await caller.client.deleteMessage(draft.id).catch(() => undefined);
     throw error;
   }
-}
-
-type Outcome = { fileId: string; status: "completed" | "failed" };
-
-/** The upload outcomes in a retry, or a description of what is wrong with them. */
-function readOutcomes(ctx: ServerContext, state: RoundState): { outcomes: Outcome[] } | { missing: string[] } | { problem: string } {
-  if (ctx.mcpReq.droppedInputResponseKeys?.includes(UPLOADS_KEY)) {
-    return { problem: `inputResponses.${UPLOADS_KEY} must be the bare answer {resultType, files}, not wrapped in {method, result}` };
-  }
-  const answer = ctx.mcpReq.inputResponses?.[UPLOADS_KEY] as { resultType?: unknown; files?: unknown } | undefined;
-  if (answer === undefined) return { missing: state.files.map((f) => f.id) };
-  if (answer.resultType !== "complete") return { problem: `inputResponses.${UPLOADS_KEY}.resultType must be "complete"` };
-  if (!Array.isArray(answer.files)) return { problem: `inputResponses.${UPLOADS_KEY}.files must be an array of {fileId, status}` };
-  const expected = new Set(state.files.map((f) => f.id));
-  const seen = new Set<string>();
-  const outcomes: Outcome[] = [];
-  for (const item of answer.files as Array<{ fileId?: unknown; status?: unknown }>) {
-    const id = item?.fileId;
-    if (typeof id !== "string") return { problem: "every upload outcome needs a fileId" };
-    if (!expected.has(id)) return { problem: `upload outcome for unknown file ${JSON.stringify(id)}; this call requested uploads for ${[...expected].map((x) => JSON.stringify(x)).join(", ")}` };
-    if (seen.has(id)) return { problem: `more than one upload outcome for file ${JSON.stringify(id)}` };
-    if (item.status !== "completed" && item.status !== "failed") {
-      return { problem: `upload outcome for file ${JSON.stringify(id)} has status ${JSON.stringify(item.status)}; use "completed" or "failed"` };
-    }
-    seen.add(id);
-    outcomes.push({ fileId: id, status: item.status });
-  }
-  const missing = [...expected].filter((id) => !seen.has(id));
-  return missing.length ? { missing } : { outcomes };
 }
 
 /** Delete a call's draft if it is still an unsent draft. */
@@ -139,52 +112,34 @@ async function storedSha256(caller: Caller, draft: string, filename: string, siz
 }
 
 /**
- * Handle a retry. `requestState` was verified by the SDK seam (codec MAC, expiry and principal binding) before this
- * runs; a state that fails there never reaches the tool and is answered with JSON-RPC -32602.
+ * Handle a retry, in the spec's order. The SDK has already verified requestState's MAC, expiry and principal binding
+ * (a failure there is answered with -32602 before the tool runs). Then:
+ *
+ * 1–2. The state must be this server's, for this tool, address and arguments, and not already used: else -32602.
+ * 3. Each file must be in the draft with its declared size, and digest when one was given: else a tool error, and
+ *    the call ends with its draft deleted.
+ * 4. The call is claimed so it runs at most once. In this process that is the round record; across instances the
+ *    fmsg host sends a draft only once, so a second send fails rather than sending twice.
+ * 5. The tool finishes.
  */
 export async function resumeUploads(call: FileCall, finish: Finish): Promise<ToolResult> {
   const { runtime, ctx, caller, signal, tool } = call;
+  const invalid = (reason: string) => runtime.invalidRequestState(reason) ?? toolError(`requestState: ${reason}. Nothing was sent.`);
   const state = ctx.mcpReq.requestState<RoundState>();
-  if (!state || typeof state !== "object" || state.v !== 1) return toolError("requestState is not one this server issued for file uploads. Call the tool again without it.");
-  if (state.tool !== tool) return toolError(`this requestState was issued by ${state.tool}, not ${tool}. Retry ${state.tool} with it, or call ${tool} again without it.`);
-  if (state.address !== caller.address.toLowerCase()) return toolError("this requestState was issued to another fmsg address.");
-  if (state.args !== argumentsHash(call.args)) {
-    return toolError(`the arguments differ from the ${tool} call that requested these uploads. Retry with exactly the same arguments, ` +
-      "or call the tool again without requestState to start over. Nothing was sent.");
-  }
+  if (!state || typeof state !== "object" || state.v !== 2) return invalid("not one this server issued for file uploads");
+  if (state.tool !== tool) return invalid(`issued by ${state.tool}, not ${tool}`);
+  if (state.address !== caller.address.toLowerCase()) return invalid("issued to another fmsg address");
+  if (state.args !== argumentsHash(call.args)) return invalid(`the arguments differ from the ${tool} call that requested these uploads`);
   const known = runtime.status(state.round);
-  if (known?.status === "done") return toolError(`this ${tool} call already completed (${known.outcome ?? "done"}); a repeated retry does not run it again.`);
-  if (known?.status === "running") return toolError(`this ${tool} call is already being completed by another retry; it does not run twice.`);
-  if (known?.status === "ended") return toolError(`this ${tool} call already ended: ${known.outcome ?? "it failed"}. Call ${tool} again without requestState to start over.`);
-  if (state.exp * 1000 <= Date.now()) {
-    runtime.mark(state.round, "ended", "its upload targets expired", caller, state.draft);
-    await discardDraft(caller, state.draft);
-    return toolError(`the upload targets for this ${tool} call expired at ${isoTime(state.exp)}, so its draft was discarded and nothing was sent. ` +
-      `Call ${tool} again without requestState to get new targets.`);
-  }
+  if (known && known.status !== "open") return invalid(`this ${tool} call was already ${known.status === "running" ? "being completed by another retry" : `completed (${known.outcome ?? "done"})`}`);
 
-  const read = readOutcomes(ctx, state);
-  if ("problem" in read) return toolError(`${read.problem}. Nothing was sent; the upload targets stay valid until ${isoTime(state.exp)}.`);
-  if ("missing" in read) {
-    // An unanswered upload is unresolved: ask for it again, with the same targets, rather than run the tool.
-    const requestState = await runtime.codec.mint(state, ctx);
-    if (!runtime.offer(requestState, runtime.uploadRequest(state))) {
-      return toolError(`no upload outcome was given for ${read.missing.map((x) => JSON.stringify(x)).join(", ")}; include one for every file.`);
-    }
-    return inputRequired({ requestState });
-  }
-  const failed = read.outcomes.filter((o) => o.status === "failed").map((o) => o.fileId);
-  if (failed.length) {
-    runtime.mark(state.round, "ended", `the client could not upload ${failed.join(", ")}`, caller, state.draft);
-    await discardDraft(caller, state.draft);
-    return toolError(`the client reported that ${failed.map((x) => JSON.stringify(x)).join(", ")} could not be uploaded, so this ${tool} call ` +
-      "ended and nothing was sent. Call the tool again to retry.");
-  }
-
-  if (!runtime.mark(state.round, "running", undefined, caller, state.draft)) {
-    return toolError(`this ${tool} call is already being completed by another retry; it does not run twice.`);
-  }
+  if (!runtime.mark(state.round, "running", undefined, caller, state.draft)) return invalid(`this ${tool} call is already being completed by another retry`);
   let finished = false;
+  const end = async (outcome: string) => {
+    runtime.mark(state.round, "ended", outcome);
+    finished = true;
+    await discardDraft(caller, state.draft);
+  };
   try {
     let draft: FmsgMessage;
     try { draft = await caller.client.getMessage(state.draft, signal); }
@@ -192,48 +147,43 @@ export async function resumeUploads(call: FileCall, finish: Finish): Promise<Too
       if (error instanceof FmsgHttpError && error.status === 404) {
         runtime.mark(state.round, "ended", "its draft no longer exists");
         finished = true;
-        return toolError(`the draft this ${tool} call was staging its files in (${state.draft}) no longer exists, so nothing was sent. Call ${tool} again without requestState.`);
+        return toolError(`the draft this ${tool} call staged its files in (${state.draft}) no longer exists, so the tool did not run and nothing was sent.`);
       }
       throw error;
     }
     if (draft.time !== null && draft.time !== undefined) {
       runtime.mark(state.round, "done", `message ${draft.id} was sent`);
       finished = true;
-      return toolError(`this ${tool} call already completed: message ${draft.id} was sent. A repeated retry does not send it again.`);
+      return invalid(`this ${tool} call already completed: message ${draft.id} was sent`);
     }
-    const attachments: Attachment[] = draft.attachments ?? [];
-    const notArrived = state.files.filter((f) => !attachments.some((a) => a.filename === f.filename));
-    if (notArrived.length) {
-      // An early retry: keep the call open so the client can still upload and retry before the targets expire.
-      runtime.mark(state.round, "open");
-      finished = true;
-      return toolError(`${notArrived.map((f) => JSON.stringify(f.id)).join(", ")} ${notArrived.length === 1 ? "was" : "were"} reported completed, ` +
-        `but this server has not received ${notArrived.length === 1 ? "its" : "their"} bytes. PUT each file to its upload target first, then ` +
-        `retry with the same requestState before ${isoTime(state.exp)}. Nothing was sent.`);
+    const attachments = draft.attachments ?? [];
+    const missing = state.files.filter((f) => !attachments.some((a) => a.filename === f.filename));
+    if (missing.length) {
+      await end(`${missing.map((f) => f.id).join(", ")} did not arrive`);
+      return toolError(`this server has not received ${missing.map((f) => JSON.stringify(f.id)).join(", ")}, so ${tool} did not run and nothing ` +
+        "was sent. The draft was deleted; call the tool again, without requestState, to start over.");
     }
     for (const f of state.files) {
       const stored = attachments.find((a) => a.filename === f.filename)!;
-      const sha256 = stored.size === f.size
-        ? runtime.verifiedSha256(`${state.draft}/${f.filename}`) ?? await storedSha256(caller, state.draft, f.filename, f.size, signal)
-        : "";
-      if (sha256 !== f.sha256) {
-        runtime.mark(state.round, "ended", `${f.id} did not match its declared size and digest`);
-        finished = true;
-        await discardDraft(caller, state.draft);
-        return toolError(`file ${JSON.stringify(f.id)} in the draft does not match its declared size (${f.size} bytes) and digest ` +
-          `(${hexToBase64url(f.sha256)}), so this ${tool} call ended and nothing was sent. Call the tool again to retry.`);
+      let ok = stored.size === f.size;
+      if (ok && f.sha256) {
+        const sha256 = runtime.verifiedSha256(`${state.draft}/${f.filename}`) ?? await storedSha256(caller, state.draft, f.filename, f.size, signal);
+        ok = sha256 === f.sha256;
+      }
+      if (!ok) {
+        await end(`${f.id} did not match its declared size or digest`);
+        return toolError(`file ${JSON.stringify(f.id)} as received does not match its declared size (${f.size} bytes)` +
+          `${f.sha256 ? ` and digest (${hexToBase64url(f.sha256)})` : ""}, so ${tool} did not run and nothing was sent. Call the tool again to retry.`);
       }
     }
     let result: CallToolResult;
     try { result = await finish(draft, state.summary, signal); }
     catch (error) {
       // Like a call without uploads, a failed send deletes its draft.
-      runtime.mark(state.round, "ended", "it failed");
-      finished = true;
-      await discardDraft(caller, state.draft);
+      await end("it failed");
       throw error;
     }
-    const outcome = (result.structuredContent as { id?: string; draft_id?: string } | undefined);
+    const outcome = result.structuredContent as { id?: string; draft_id?: string } | undefined;
     runtime.mark(state.round, "done", outcome?.draft_id ? `draft ${outcome.draft_id} was created` : outcome?.id ? `message ${outcome.id} was sent` : undefined);
     finished = true;
     return result;

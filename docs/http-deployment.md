@@ -144,14 +144,17 @@ is `404` with a message saying so. The proxy setup above already forwards these 
 
 ### File-uploads extension targets
 
-With an https public URL the server also offers the MCP file-uploads extension (see the README and
-[the implementation notes](files-extension-notes.md)). Its upload targets are
-`PUT /mcp/uploads/{token}` under the same `/mcp` prefix, so the proxy setup above covers them, with
-the same streaming, idle timeout and body-size advice. Each target accepts one upload of the declared
-size and SHA-256 from the address it was issued to, and expires after `FMSG_MCP_FILES_TARGET_TTL_SECONDS`.
-A call's `requestState` and its targets are signed with a per-process key, so with several instances
-behind a load balancer set the same `FMSG_MCP_STATE_SECRET` (at least 32 bytes) on each. A
-single process deletes the draft of a call that was never retried once its targets expire. With a
+Over HTTP the server also offers the MCP file-uploads extension (see the README and
+[the implementation notes](files-extension-notes.md)). Its upload targets are paths under the client's
+MCP address, `/uploads/{token}`, which a client resolves to `PUT /mcp/uploads/{token}` when it connects to
+`/mcp`. If the proxy exposes `/mcp` at another path, it must route that path's `/uploads/` the same way.
+The proxy setup above covers them, with the same streaming, idle timeout and body-size advice. Clients
+use these targets only over https (or on loopback). Each target accepts one upload of the declared
+size (and digest, when declared) from the address it was issued to, started within
+`FMSG_MCP_FILES_TARGET_TTL_SECONDS`. The call's `requestState` stays valid 15 minutes longer, for a
+transfer started late and its retry. Both are signed with a per-process key, so with several instances
+behind a load balancer set the same `FMSG_MCP_STATE_SECRET` (at least 32 bytes) on each. A single
+process deletes the draft of a call that was never retried once its `requestState` expires. With a
 shared key no draft is deleted automatically, because another instance may have completed the call.
 
 Host and Origin validation applies to downloads and uploads too. Allowed browser clients can preflight GET

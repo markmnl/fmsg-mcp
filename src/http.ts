@@ -225,9 +225,9 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const metadataPath = resource ? `/.well-known/oauth-protected-resource${resource.pathname === "/" ? "" : resource.pathname}` : undefined;
   const metadataUrl = resource ? `${resource.origin}${metadataPath}` : "";
   const shutdown = new AbortController();
-  // The file-uploads extension issues targets at the public MCP URL; config.files is set only when that is https.
-  const files = config.files && downloadBaseUrl(config) ? new FilesRuntime(config.files, downloadBaseUrl(config)!, safeLog) : undefined;
-  const serveMcp = (fetch: () => Promise<Response>) => files ? files.serve(fetch) : fetch();
+  // The file-uploads extension: its targets are paths under the MCP address, so it needs no public URL.
+  const files = config.files ? new FilesRuntime(config.files, safeLog) : undefined;
+  const serveMcp = (request: Request, body: unknown, fetch: () => Promise<Response>) => files ? files.serve(request, body, fetch) : fetch();
   // Presigned links need the public URL to build them; they carry their own authorization.
   const links = downloadBaseUrl(config) ? new PresignedLinks(downloadBaseUrl(config)!, config.http.stateSecret) : undefined;
   // Each MCP request gets its own server instance, so indicators kept up between requests live here, one registry
@@ -342,7 +342,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (isTarget) {
         const refusal = (error: string, status: number, headers: Record<string, string> = {}) => sendWebResponse(res, Response.json({ error }, { status, headers }));
         if (req.method !== "PUT") return refusal("use PUT to upload to an upload target", 405, { allow: "PUT, OPTIONS" });
-        if (url.search) return refusal("upload target URLs must not contain query parameters", 400);
+        // A path target keeps the MCP address's query string, so one is ignored here.
         const token = targetToken(url.pathname);
         if (!token) return refusal("unknown upload target", 404);
         target = { token };
@@ -459,7 +459,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
           }
           const state: OAuthRequestState = { scopes };
           return await oauthRequestState.run(state, async () => {
-            const response = await serveMcp(() => oauthHandler.fetch(request, { authInfo: authenticated, parsedBody }));
+            const response = await serveMcp(request, parsedBody, () => oauthHandler.fetch(request, { authInfo: authenticated, parsedBody }));
             await sendWebResponse(res, response, () => state.error ? oauthErrorResponse(state.error, metadataUrl) : undefined);
           });
         } catch (error) {
@@ -486,7 +486,7 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
       if (download) return serveDownload(apiKeyProvider, auth);
       if (upload) return serveUpload(apiKeyProvider, auth);
       if (target) return serveTarget(apiKeyProvider, auth);
-      return sendWebResponse(res, await serveMcp(() => apiKeyHandler.fetch(request, { authInfo: auth })));
+      return sendWebResponse(res, await serveMcp(request, undefined, () => apiKeyHandler.fetch(request, { authInfo: auth })));
     })().catch((error) => {
       safeLog(`request failed: ${error instanceof Error ? error.message : String(error)}`);
       if (res.destroyed) return;

@@ -36,14 +36,19 @@
   extension for anything larger.
 
 - Reference implementation of the experimental MCP file-uploads extension (`io.modelcontextprotocol/files`,
-  draft at experimental-ext-file-uploads `6101d34`), over HTTP with an https public MCP URL. `send_message`,
-  `reply` and `create_draft` accept FileInputs next to their classic attachments, inline or uploaded out of band.
-  Out-of-band files get one single-use, short-lived upload target each (`PUT /mcp/uploads/{token}`, the
-  connection's credential, bound to the declared size and SHA-256), streamed into the call's draft. The retry
-  confirms every file before the message is sent. New settings: `FMSG_MCP_FILES_EXTENSION`,
-  `FMSG_MCP_FILES_MAX_INLINE_BYTES`, `FMSG_MCP_FILES_MAX_FILE_BYTES` and `FMSG_MCP_FILES_TARGET_TTL_SECONDS`;
-  `FMSG_MCP_STATE_SECRET` also keys requestState and targets. `docs/files-extension-notes.md` lists where the draft is open, the choices made and
-  suggested fixes. Clients without the extension see no change.
+  the draft merged in experimental-ext-file-uploads PR #1, `0b61430`), over HTTP. `server/discover`
+  advertises `upload` and `maxInlineBytes`. `send_message`, `reply` and `create_draft` accept FileInputs
+  next to their classic attachments, inline or out of band; `tools/list` shows them only to requests that
+  declare the extension. Out-of-band files get an `upload_required` result with one single-use PUT target
+  each: a path under the MCP address (`/uploads/{token}`), sent with the connection's credential, bound to
+  the declared size (and digest, when given) and streamed into the call's draft. The retry carries only
+  `requestState`; the server confirms every file before the message is sent, and runs a call at most once.
+  Protocol errors follow the spec: `-32021` for a file without data from a request that did not declare
+  `upload`, `-32602` for a retry whose `requestState` does not match the call or was already used. New
+  settings: `FMSG_MCP_FILES_EXTENSION`, `FMSG_MCP_FILES_MAX_INLINE_BYTES`, `FMSG_MCP_FILES_MAX_FILE_BYTES`
+  and `FMSG_MCP_FILES_TARGET_TTL_SECONDS`; `FMSG_MCP_STATE_SECRET` also keys `requestState` and targets.
+  `docs/files-extension-notes.md` lists the choices made where the draft is open. Clients without the
+  extension see no change.
 
 - A recipient added to a message after it was sent can reply to it. The Web API takes such a reply only
   through the hash of the add-to batch that added them; `reply`, `create_draft` (and so `send_draft`) now

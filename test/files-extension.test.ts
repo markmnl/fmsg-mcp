@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHttpServer, type HttpServerHandle } from "../src/http.js";
 import { FILES_EXTENSION } from "../src/files/extension.js";
 import { FakeFmsgServer } from "./fake-fmsg-server.js";
-import { FILES, FilesClient, type RpcResponse, type UploadTarget, digestOf, fileInput } from "./files-client.js";
+import { FilesClient, type RpcResponse, type UploadTarget, digestOf, fileInput } from "./files-client.js";
 import { ALICE, BOB, CAROL, configFor, connectInMemory } from "./helpers.js";
 import { type Certificate, hasOpenssl, selfSignedCertificate, tlsProxy } from "./tls.js";
 
@@ -46,66 +46,79 @@ describe.skipIf(!hasOpenssl())("MCP file-uploads extension over HTTPS", () => {
 
   const attachmentsOf = (id: string) => fake.messages.get(id)!.attachments.map((a) => ({ filename: a.filename, data: a.data.toString("utf8"), type: a.type }));
   const drafts = () => [...fake.messages.values()].filter((m) => m.time === null && !m.deleted);
+  const sentMessages = () => [...fake.messages.values()].filter((m) => m.time !== null);
 
-  /** The initial call: answers input_required with upload targets. */
+  /** The initial call: answers upload_required with upload targets. */
   async function initial(name: string, args: Record<string, unknown>) {
     const reply = await alice.rpc("tools/call", { name, arguments: args });
-    expect(reply.result?.resultType, JSON.stringify(reply)).toBe("input_required");
-    const uploads = (reply.result!.inputRequests as Record<string, { method: string; params: { files: UploadTarget[] } }>).uploads!;
-    return { state: reply.result!.requestState as string, targets: uploads.params.files, uploads };
+    expect(reply.result?.resultType, JSON.stringify(reply)).toBe("upload_required");
+    return { state: reply.result!.requestState as string, targets: reply.result!.uploads as UploadTarget[], result: reply.result! };
   }
-  const retry = (name: string, args: Record<string, unknown>, state: string, files: Array<{ fileId: string; status: string }>, client = alice) =>
-    client.rpc("tools/call", { name, arguments: args, requestState: state, inputResponses: { uploads: { resultType: "complete", files } } });
+  const retry = (name: string, args: Record<string, unknown>, state: string, client = alice) =>
+    client.rpc("tools/call", { name, arguments: args, requestState: state });
 
   describe("end to end", () => {
-    it("advertises the extension and marks FileInputs with x-mcp-file", async () => {
-      expect(await alice.discover()).toEqual({ maxInlineBytes: 1024 * 1024 });
-      const tools = (await alice.rpc("tools/list", {})).result!.tools as Array<{ name: string; inputSchema: { properties: Record<string, { items?: { anyOf?: Array<Record<string, unknown>> } }> } }>;
-      for (const name of ["send_message", "reply", "create_draft"]) {
-        const items = tools.find((t) => t.name === name)!.inputSchema.properties.attachments!.items!;
-        const marked = items.anyOf!.find((s) => "x-mcp-file" in s)!;
-        expect(marked.required).toEqual(expect.arrayContaining(["id", "mimeType", "size", "digest"]));
-        expect(items.anyOf!.some((s) => (s.required as string[] | undefined)?.includes("filename"))).toBe(true);
-      }
+    it("advertises upload and maxInlineBytes", async () => {
+      expect(await alice.discover()).toEqual({ upload: {}, maxInlineBytes: 1024 * 1024 });
     });
 
-    it("sends a message with out-of-band, inline and classic attachments in one call", async () => {
+    it("lists FileInputs marked with x-mcp-file only to requests that declare the extension", async () => {
+      type Tool = { name: string; inputSchema: { properties: Record<string, { items?: { anyOf?: Array<Record<string, unknown>> } }> } };
+      const declared = (await alice.rpc("tools/list", {})).result!.tools as Tool[];
+      for (const name of ["send_message", "reply", "create_draft"]) {
+        const items = declared.find((t) => t.name === name)!.inputSchema.properties.attachments!.items!;
+        const marked = items.anyOf!.find((s) => "x-mcp-file" in s)!;
+        expect(marked.required).toEqual(["id", "mimeType", "size"]);
+        expect(items.anyOf!.some((s) => (s.required as string[] | undefined)?.includes("filename"))).toBe(true);
+      }
+      const plain = await alice.rpc("tools/list", {}, null);
+      expect(JSON.stringify(plain.result)).not.toContain("x-mcp-file");
+      expect(JSON.stringify(plain.result)).toContain("data_base64");
+    });
+
+    it("sends a message with out-of-band, inline, empty and classic attachments in one call", async () => {
       const pdf = big;
       const csv = bytes("a,b\n1,2\n");
       const note = bytes("inline note");
+      const { digest: _omit, ...csvInput } = fileInput("file-2", "data.csv", "text/csv", csv);
       const args = {
         to: [BOB], topic: "Q3", body: "files attached",
         attachments: [
-          fileInput("file-1", "Q3 report.pdf", "application/pdf", pdf),
-          fileInput("file-2", "data.csv", "text/csv", csv),
+          fileInput("file-1", "reports/Q3 report.pdf", "application/pdf", pdf),
+          csvInput,
           fileInput("file-3", "note.txt", "text/plain", note, true),
+          { id: "file-4", name: "empty.txt", mimeType: "text/plain", size: 0 },
           { filename: "readme.txt", data_text: "classic" },
         ],
       };
-      const { reply, rounds } = await alice.callWithFiles("send_message", args, { "file-1": pdf, "file-2": csv });
+      const outcome = await alice.callWithFiles("send_message", args, { "file-1": pdf, "file-2": csv });
+      expect(outcome.failed).toBeUndefined();
+      const reply = outcome.reply!;
       expect(reply.result?.isError, textOf(reply)).toBeFalsy();
       const sent = structuredOf<{ id: string; attachments: Array<{ filename: string; size: number; type: string }> }>(reply);
       expect(textOf(reply)).toContain(`Sent message ${sent.id} "Q3"`);
-      expect(sent.attachments.map((a) => a.filename)).toEqual(["Q3_report.pdf", "data.csv", "note.txt", "readme.txt"]);
+      expect(sent.attachments.map((a) => a.filename)).toEqual(["Q3_report.pdf", "data.csv", "empty.txt", "note.txt", "readme.txt"]);
       expect(sent.attachments.find((a) => a.filename === "Q3_report.pdf")).toMatchObject({ size: pdf.byteLength, type: "application/pdf" });
       const stored = fake.messages.get(sent.id)!;
       expect(stored.time).not.toBeNull();
       expect(Buffer.compare(stored.attachments.find((a) => a.filename === "Q3_report.pdf")!.data, Buffer.from(pdf))).toBe(0);
       expect(attachmentsOf(sent.id).find((a) => a.filename === "data.csv")).toMatchObject({ data: "a,b\n1,2\n", type: "text/csv" });
+      expect(attachmentsOf(sent.id).find((a) => a.filename === "empty.txt")).toMatchObject({ data: "" });
 
-      // One round, one target per file without data, each same-origin https, credential-bearing and single-use.
-      expect(rounds).toHaveLength(1);
-      const targets = rounds[0]!.targets;
+      // One target per non-empty file without data: PUT paths under the MCP address, with the credential.
+      const targets = outcome.targets;
       expect(targets.map((t) => t.fileId)).toEqual(["file-1", "file-2"]);
       for (const t of targets) {
-        expect(new URL(t.url).origin).toBe(proxy.origin);
-        expect(new URL(t.url).pathname.startsWith("/mcp/uploads/")).toBe(true);
-        expect(t.credentials).toBe("include");
+        expect(t).toMatchObject({ method: "PUT", credentials: "include" });
+        expect(t.url).toBeUndefined();
+        expect(t.path!.startsWith("/uploads/")).toBe(true);
+        expect(Date.parse(t.expiresAt!)).toBeGreaterThan(Date.now());
       }
       expect(targets[0]!.headers).toEqual({ "Content-Type": "application/pdf" });
-      expect(alice.log.filter((r) => r.method === "PUT").map((r) => [r.status, r.authorization])).toEqual([[201, true], [201, true]]);
-      // The result does not echo upload URLs.
-      expect(JSON.stringify(reply)).not.toContain("/mcp/uploads/");
+      const puts = alice.log.filter((r) => r.method === "PUT");
+      expect(puts.map((r) => [new URL(r.url).pathname.startsWith("/mcp/uploads/"), r.status, r.authorization])).toEqual([[true, 201, true], [true, 201, true]]);
+      // The result does not carry targets.
+      expect(JSON.stringify(reply)).not.toContain("/uploads/");
       expect(drafts()).toEqual([]);
     });
 
@@ -113,7 +126,7 @@ describe.skipIf(!hasOpenssl())("MCP file-uploads extension over HTTPS", () => {
       const parent = fake.seed({ from: BOB, to: [ALICE], topic: "Plans", data: "send me the file" });
       const file = bytes("the file");
       const { reply } = await alice.callWithFiles("reply", { id: parent.id, body: "here", attachments: [fileInput("f", "plan.md", "text/markdown", file)] }, { f: file });
-      const sent = structuredOf<{ id: string; parent_id: string; to: string[]; thread_topic: string }>(reply);
+      const sent = structuredOf<{ id: string; parent_id: string; to: string[]; thread_topic: string }>(reply!);
       expect(sent).toMatchObject({ parent_id: parent.id, to: [BOB], thread_topic: "Plans" });
       expect(attachmentsOf(sent.id)).toEqual([{ filename: "plan.md", data: "the file", type: "text/markdown" }]);
     });
@@ -121,22 +134,31 @@ describe.skipIf(!hasOpenssl())("MCP file-uploads extension over HTTPS", () => {
     it("creates a draft with an uploaded file and leaves it unsent", async () => {
       const file = bytes("draft file");
       const { reply } = await alice.callWithFiles("create_draft", { to: [CAROL], topic: "Later", body: "b", attachments: [fileInput("f", "x.bin", "application/octet-stream", file)] }, { f: file });
-      const draft = structuredOf<{ draft_id: string; attachments: Array<{ filename: string }> }>(reply);
+      const draft = structuredOf<{ draft_id: string; attachments: Array<{ filename: string }> }>(reply!);
       expect(draft.attachments.map((a) => a.filename)).toEqual(["x.bin"]);
       expect(fake.messages.get(draft.draft_id)!.time).toBeNull();
-      expect(textOf(reply)).toContain(`Created draft ${draft.draft_id}`);
+      expect(textOf(reply!)).toContain(`Created draft ${draft.draft_id}`);
+    });
+
+    it("runs nothing when a transfer fails, and the client sends no retry", async () => {
+      const file = bytes("x");
+      const outcome = await alice.callWithFiles("send_message", { to: [BOB], topic: "t", body: "b", attachments: [fileInput("f", "f.txt", "text/plain", file)] }, { f: file }, { failUpload: ["f"] });
+      expect(outcome.failed).toContain("failed on purpose");
+      expect(sentMessages()).toEqual([]);
+      // The draft waits for a retry that never comes, until its requestState expires.
+      expect(drafts()).toHaveLength(1);
     });
   });
 
   describe("checks on the initial call", () => {
     it.each([
       ["duplicate ids", [fileInput("a", "one.txt", "text/plain", bytes("1")), fileInput("a", "two.txt", "text/plain", bytes("2"))], 'file "a": id is used by more than one file'],
-      ["a digest algorithm other than sha-256", [{ ...fileInput("a", "x.txt", "text/plain", bytes("1")), digest: { algorithm: "md5", value: digestOf(bytes("1")).value } }], "digest algorithm must be sha-256"],
       ["a malformed digest", [{ ...fileInput("a", "x.txt", "text/plain", bytes("1")), digest: { algorithm: "sha-256", value: "abc" } }], "base64url SHA-256 without padding"],
       ["a malformed media type", [fileInput("a", "x.txt", "not a type", bytes("1"))], "is not a media type"],
-      ["colliding names", [fileInput("a", "same.txt", "text/plain", bytes("1")), fileInput("b", "same.txt", "text/plain", bytes("2"))], "already named same.txt"],
+      ["colliding names", [fileInput("a", "same.txt", "text/plain", bytes("1")), fileInput("b", "dir/same.txt", "text/plain", bytes("2"))], "already named same.txt"],
       ["inline data that does not match its digest", [{ ...fileInput("a", "x.txt", "text/plain", bytes("one"), true), digest: digestOf(bytes("two")) }], "does not match its digest"],
       ["inline data that does not match its size", [{ ...fileInput("a", "x.txt", "text/plain", bytes("one"), true), size: 4 }], "decodes to 3 bytes but size is 4"],
+      ["an empty file that does not match its digest", [{ id: "a", name: "e.txt", mimeType: "text/plain", size: 0, digest: digestOf(bytes("x")) }], "does not match its digest"],
     ])("refuses %s before creating anything", async (_name, attachments, message) => {
       const reply = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments } });
       expect(reply.result?.isError).toBe(true);
@@ -148,7 +170,7 @@ describe.skipIf(!hasOpenssl())("MCP file-uploads extension over HTTPS", () => {
     it("refuses files over the operator's size limit and inline data over maxInlineBytes", async () => {
       await http.close(); await proxy.close();
       await start({ FMSG_MCP_FILES_MAX_FILE_BYTES: "1000", FMSG_MCP_FILES_MAX_INLINE_BYTES: "10" });
-      expect(await alice.discover()).toEqual({ maxInlineBytes: 10 });
+      expect(await alice.discover()).toEqual({ upload: {}, maxInlineBytes: 10 });
       const tooBig = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments: [fileInput("a", "x.bin", "application/octet-stream", big)] } });
       expect(textOf(tooBig)).toContain("300000 bytes is larger than this server's limit of 1000 bytes per file");
       const inline = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments: [fileInput("a", "x.txt", "text/plain", bytes("more than ten bytes"), true)] } });
@@ -156,16 +178,26 @@ describe.skipIf(!hasOpenssl())("MCP file-uploads extension over HTTPS", () => {
       expect(fake.messages.size).toBe(0);
     });
 
-    it("sends inline FileInputs without an upload round, even when the request did not declare the extension", async () => {
-      const reply = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments: [fileInput("a", "x.txt", "text/plain", bytes("hi"), true)] } }, false);
+    it("accepts no inline data when maxInlineBytes is 0, and does not advertise it", async () => {
+      await http.close(); await proxy.close();
+      await start({ FMSG_MCP_FILES_MAX_INLINE_BYTES: "0" });
+      expect(await alice.discover()).toEqual({ upload: {} });
+      const inline = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments: [fileInput("a", "x.txt", "text/plain", bytes("hi"), true)] } });
+      expect(textOf(inline)).toContain("does not accept inline data");
+      expect(fake.messages.size).toBe(0);
+    });
+
+    it("sends inline FileInputs without an upload request, even when the request did not declare the extension", async () => {
+      const reply = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments: [fileInput("a", "x.txt", "text/plain", bytes("hi"), true)] } }, null);
       expect(reply.result?.resultType).toBe("complete");
       expect(attachmentsOf(structuredOf<{ id: string }>(reply).id)).toEqual([{ filename: "x.txt", data: "hi", type: "text/plain" }]);
     });
 
-    it("refuses a file without data when the request did not declare the extension", async () => {
-      const reply = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments: [fileInput("a", "x.txt", "text/plain", bytes("hi"))] } }, false);
-      expect(reply.result?.isError).toBe(true);
-      expect(textOf(reply)).toContain(`did not declare the ${FILES_EXTENSION} extension`);
+    it.each([["no extension", null], ["the extension without upload", {}]])("answers -32021 to a file without data on a request declaring %s", async (_name, settings) => {
+      const reply = await alice.rpc("tools/call", { name: "send_message", arguments: { to: [BOB], topic: "t", body: "b", attachments: [fileInput("a", "x.txt", "text/plain", bytes("hi"))] } }, settings);
+      expect(reply.status).toBe(400);
+      expect(reply.result).toBeUndefined();
+      expect(reply.error).toMatchObject({ code: -32021, data: { requiredCapabilities: { extensions: { [FILES_EXTENSION]: { upload: {} } } } } });
       expect(fake.messages.size).toBe(0);
     });
 
@@ -179,12 +211,12 @@ describe.skipIf(!hasOpenssl())("MCP file-uploads extension over HTTPS", () => {
 
   describe("upload targets", () => {
     const args = (file: Uint8Array) => ({ to: [BOB], topic: "t", body: "b", attachments: [fileInput("f", "f.bin", "application/octet-stream", file)] });
+    const auth = { authorization: "Bearer fmsgk_alice_secret" };
 
     it("enforce the declared size and digest, and take one upload", async () => {
       const file = bytes("exact bytes");
       const { targets } = await initial("send_message", args(file));
-      const url = targets[0]!.url;
-      const auth = { authorization: "Bearer fmsgk_alice_secret" };
+      const url = alice.resolve(targets[0]!);
       expect((await alice.http("PUT", url, auth, bytes("exact bytes and more"))).status).toBe(413);
       expect((await alice.http("PUT", url, auth, bytes("short"))).status).toBe(400);
       const wrong = await alice.http("PUT", url, auth, bytes("other bytes"));
@@ -197,125 +229,109 @@ describe.skipIf(!hasOpenssl())("MCP file-uploads extension over HTTPS", () => {
       expect(drafts()[0]!.attachments.map((a) => a.filename)).toEqual(["f.bin"]);
     });
 
+    it("pass the client's checks, and keep working with the MCP address's query string", async () => {
+      const file = bytes("q");
+      const { targets } = await initial("send_message", args(file));
+      expect(await alice.checkTarget(targets[0]!)).toMatchObject({ headers: { "Content-Type": "application/octet-stream", authorization: "Bearer fmsgk_alice_secret" } });
+      const url = new URL(alice.resolve(targets[0]!));
+      url.search = "?tenant=1";
+      expect((await alice.http("PUT", url.toString(), auth, file)).status).toBe(201);
+    });
+
     it("need the credential of the address they were issued to", async () => {
       const file = bytes("x");
       const { targets } = await initial("send_message", args(file));
-      expect((await alice.http("PUT", targets[0]!.url, {}, file)).status).toBe(401);
-      const bob = await alice.http("PUT", targets[0]!.url, { authorization: "Bearer fmsgk_bob_secret" }, file);
+      const url = alice.resolve(targets[0]!);
+      expect((await alice.http("PUT", url, {}, file)).status).toBe(401);
+      const bob = await alice.http("PUT", url, { authorization: "Bearer fmsgk_bob_secret" }, file);
       expect(bob.status).toBe(403);
       expect(bob.body.toString()).toContain("issued to another fmsg address");
-      const url = targets[0]!.url;
       const tampered = `${url.slice(0, -1)}${url.endsWith("A") ? "B" : "A"}`;
-      expect((await alice.http("PUT", tampered, { authorization: "Bearer fmsgk_alice_secret" }, file)).status).toBe(404);
+      expect((await alice.http("PUT", tampered, auth, file)).status).toBe(404);
     });
 
-    it("expire, and a retry after expiry ends the call and discards its draft", async () => {
-      const file = bytes("late");
-      const { targets, state } = await initial("send_message", args(file));
-      expect(drafts()).toHaveLength(1);
+    it("refuse a transfer started after expiresAt, but a retry for bytes that arrived in time still runs", async () => {
+      const late = bytes("late");
+      const first = await initial("send_message", args(late));
+      const onTime = bytes("on time");
+      const second = await initial("send_message", { ...args(onTime), topic: "t2" });
+      expect((await alice.http("PUT", alice.resolve(second.targets[0]!), auth, onTime)).status).toBe(201);
       vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 11 * 60_000 });
-      const late = await alice.http("PUT", targets[0]!.url, { authorization: "Bearer fmsgk_alice_secret" }, file);
-      expect(late.status).toBe(410);
-      expect(late.body.toString()).toContain("expired");
-      const reply = await retry("send_message", args(file), state, [{ fileId: "f", status: "completed" }]);
-      expect(reply.result?.isError).toBe(true);
-      expect(textOf(reply)).toContain("upload targets for this send_message call expired");
-      expect(textOf(reply)).toContain("without requestState to get new targets");
-      expect(drafts()).toEqual([]);
+      const refused = await alice.http("PUT", alice.resolve(first.targets[0]!), auth, late);
+      expect(refused.status).toBe(410);
+      expect(refused.body.toString()).toContain("expired");
+      const done = await retry("send_message", { ...args(onTime), topic: "t2" }, second.state);
+      expect(done.result?.isError, textOf(done)).toBeFalsy();
+      expect(attachmentsOf(structuredOf<{ id: string }>(done).id)).toEqual([{ filename: "f.bin", data: "on time", type: "application/octet-stream" }]);
     });
   });
 
   describe("retries", () => {
     const file = bytes("payload");
     const args = { to: [BOB], topic: "t", body: "b", attachments: [fileInput("f", "f.txt", "text/plain", file)] };
-    const put = (url: string) => alice.http("PUT", url, { authorization: "Bearer fmsgk_alice_secret" }, file);
+    const put = (target: UploadTarget) => alice.http("PUT", alice.resolve(target), { authorization: "Bearer fmsgk_alice_secret" }, file);
 
-    it("end the call and discard the draft when a file failed", async () => {
-      const { reply } = await alice.callWithFiles("send_message", args, { f: file }, { failUpload: ["f"] });
-      expect(reply.result?.isError).toBe(true);
-      expect(textOf(reply)).toContain('reported that "f" could not be uploaded');
-      expect(drafts()).toEqual([]);
-      expect([...fake.messages.values()].filter((m) => m.time !== null)).toEqual([]);
-    });
-
-    it("explain an early retry and let the client upload and retry again", async () => {
-      const { targets, state } = await initial("send_message", args);
-      const early = await retry("send_message", args, state, [{ fileId: "f", status: "completed" }]);
+    it("do not run the tool when a file has not arrived, end the call and delete the draft", async () => {
+      const { state } = await initial("send_message", args);
+      const early = await retry("send_message", args, state);
       expect(early.result?.isError).toBe(true);
-      expect(textOf(early)).toContain("has not received its bytes. PUT each file to its upload target first");
-      expect((await put(targets[0]!.url)).status).toBe(201);
-      const done = await retry("send_message", args, state, [{ fileId: "f", status: "completed" }]);
-      expect(done.result?.isError, textOf(done)).toBeFalsy();
-      expect(attachmentsOf(structuredOf<{ id: string }>(done).id)).toEqual([{ filename: "f.txt", data: "payload", type: "text/plain" }]);
+      expect(textOf(early)).toContain('has not received "f", so send_message did not run');
+      expect(drafts()).toEqual([]);
+      expect(sentMessages()).toEqual([]);
+      const again = await retry("send_message", args, state);
+      expect(again.error).toMatchObject({ code: -32602 });
     });
 
     it("never run a call twice", async () => {
       const { targets, state } = await initial("send_message", args);
-      await put(targets[0]!.url);
-      const outcome = [{ fileId: "f", status: "completed" }];
-      const [first, second] = await Promise.all([retry("send_message", args, state, outcome), retry("send_message", args, state, outcome)]);
-      const errors = [first, second].filter((r) => r.result?.isError);
-      expect(errors).toHaveLength(1);
-      expect(textOf(errors[0]!)).toMatch(/already (being completed|completed)/u);
-      const third = await retry("send_message", args, state, outcome);
-      expect(textOf(third)).toContain("already completed (message");
-      expect([...fake.messages.values()].filter((m) => m.time !== null)).toHaveLength(1);
+      await put(targets[0]!);
+      const [first, second] = await Promise.all([retry("send_message", args, state), retry("send_message", args, state)]);
+      const refused = [first, second].filter((r) => r.error);
+      expect(refused).toHaveLength(1);
+      expect(refused[0]!.error).toMatchObject({ code: -32602 });
+      expect(refused[0]!.error!.message).toMatch(/already (being completed|completed)/u);
+      const third = await retry("send_message", args, state);
+      expect(third.error?.message).toContain("already completed (message");
+      expect(sentMessages()).toHaveLength(1);
     });
 
-    it("refuse different arguments, another tool, and malformed outcomes", async () => {
+    it("answer -32602 to different arguments or another tool, and accept the same arguments in another order", async () => {
       const { targets, state } = await initial("send_message", args);
-      await put(targets[0]!.url);
-      const changed = await retry("send_message", { ...args, body: "changed" }, state, [{ fileId: "f", status: "completed" }]);
-      expect(textOf(changed)).toContain("arguments differ from the send_message call");
-      const other = await retry("create_draft", args, state, [{ fileId: "f", status: "completed" }]);
-      expect(textOf(other)).toContain("issued by send_message, not create_draft");
-      for (const [files, message] of [
-        [[{ fileId: "g", status: "completed" }], 'unknown file "g"'],
-        [[{ fileId: "f", status: "completed" }, { fileId: "f", status: "completed" }], 'more than one upload outcome for file "f"'],
-        [[{ fileId: "f", status: "done" }], 'status "done"'],
-      ] as const) {
-        const reply = await retry("send_message", args, state, [...files]);
-        expect(reply.result?.isError).toBe(true);
-        expect(textOf(reply)).toContain(message);
-      }
-      // None of these ran the tool; the real retry still can.
-      const done = await retry("send_message", args, state, [{ fileId: "f", status: "completed" }]);
+      await put(targets[0]!);
+      const changed = await retry("send_message", { ...args, body: "changed" }, state);
+      expect(changed.error).toMatchObject({ code: -32602 });
+      expect(changed.error!.message).toContain("arguments differ from the send_message call");
+      const other = await retry("create_draft", args, state);
+      expect(other.error!.message).toContain("issued by send_message, not create_draft");
+      // None of these ran the tool; the same arguments, members reordered, still can.
+      const reordered = { attachments: [{ size: file.byteLength, digest: args.attachments[0]!.digest, mimeType: "text/plain", name: "f.txt", id: "f" }], body: "b", topic: "t", to: [BOB] };
+      const done = await retry("send_message", reordered, state);
       expect(done.result?.isError, textOf(done)).toBeFalsy();
     });
 
     it("stay retryable after a transient host error, and end with the draft deleted when the host refuses the send", async () => {
       const { targets, state } = await initial("send_message", args);
-      await put(targets[0]!.url);
-      const outcome = [{ fileId: "f", status: "completed" }];
+      await put(targets[0]!);
       const draftId = drafts()[0]!.id;
       fake.failNext = { match: new RegExp(`^GET /fmsg/${draftId}$`, "u"), status: 502, error: "upstream unavailable" };
-      const transient = await retry("send_message", args, state, outcome);
+      const transient = await retry("send_message", args, state);
       expect(transient.result?.isError).toBe(true);
       expect(textOf(transient)).toContain("HTTP 502");
       fake.failNext = { match: /\/send$/u, status: 429, error: "daily message limit reached", code: "send_count_per_1d_limit" };
-      const refused = await retry("send_message", args, state, outcome);
+      const refused = await retry("send_message", args, state);
       expect(textOf(refused)).toContain("daily message limit reached");
       expect(drafts()).toEqual([]);
-      const after = await retry("send_message", args, state, outcome);
-      expect(textOf(after)).toContain("already ended");
+      const after = await retry("send_message", args, state);
+      expect(after.error).toMatchObject({ code: -32602 });
     });
 
-    it("ask again with the same targets when outcomes are missing", async () => {
-      const { targets, state } = await initial("send_message", args);
-      const again = await alice.rpc("tools/call", { name: "send_message", arguments: args, requestState: state });
-      expect(again.result?.resultType).toBe("input_required");
-      const reissued = (again.result!.inputRequests as Record<string, { params: { files: UploadTarget[] } }>).uploads!.params.files;
-      expect(reissued.map((t) => t.url)).toEqual(targets.map((t) => t.url));
-      expect(drafts()).toHaveLength(1);
-    });
-
-    it("reject requestState that was altered or belongs to another address with -32602", async () => {
+    it("answer -32602 to requestState that was altered or belongs to another address", async () => {
       const { state } = await initial("send_message", args);
       const [version, body, mac] = state.split(".");
       const altered = `${version}.${body}.${mac!.slice(0, -2)}${mac!.endsWith("AA") ? "BB" : "AA"}`;
-      const tampered = await retry("send_message", args, altered, [{ fileId: "f", status: "completed" }]);
+      const tampered = await retry("send_message", args, altered);
       expect(tampered.error).toMatchObject({ code: -32602, message: "Invalid or expired requestState" });
-      const bob = await retry("send_message", args, state, [{ fileId: "f", status: "completed" }], clientFor("fmsgk_bob_secret"));
+      const bob = await retry("send_message", args, state, clientFor("fmsgk_bob_secret"));
       expect(bob.error).toMatchObject({ code: -32602 });
     });
   });
@@ -336,14 +352,14 @@ describe("file-uploads extension availability", () => {
     }
   });
 
-  it("needs an https public URL, and can be switched off", async () => {
+  it("is on over HTTP, and can be switched off", async () => {
     const fake = new FakeFmsgServer();
     await fake.start();
     try {
-      expect(configFor(fake, "http", { FMSG_MCP_PUBLIC_URL: "http://127.0.0.1:1/mcp" }).files).toBeUndefined();
-      expect(configFor(fake, "http", { FMSG_MCP_PUBLIC_URL: "https://mcp.example.com/mcp" }).files).toMatchObject({ maxInlineBytes: 1048576, targetTtlSeconds: 600 });
-      expect(configFor(fake, "http", { FMSG_MCP_PUBLIC_URL: "https://mcp.example.com/mcp", FMSG_MCP_FILES_EXTENSION: "off" }).files).toBeUndefined();
-      expect(() => configFor(fake, "http", { FMSG_MCP_PUBLIC_URL: "https://mcp.example.com/mcp", FMSG_MCP_STATE_SECRET: "short" })).toThrow("at least 32 bytes");
+      expect(configFor(fake, "http", {}).files).toMatchObject({ maxInlineBytes: 1048576, targetTtlSeconds: 600 });
+      expect(configFor(fake, "http", { FMSG_MCP_PUBLIC_URL: "https://mcp.example.com/mcp" }).files).toBeDefined();
+      expect(configFor(fake, "http", { FMSG_MCP_FILES_EXTENSION: "off" }).files).toBeUndefined();
+      expect(() => configFor(fake, "http", { FMSG_MCP_STATE_SECRET: "short" })).toThrow("at least 32 bytes");
     } finally {
       await fake.stop();
     }

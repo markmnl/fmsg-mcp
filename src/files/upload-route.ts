@@ -1,7 +1,8 @@
 /**
- * Upload targets: PUT /mcp/uploads/{token}. A target takes one file: the size and SHA-256 its call declared, from
- * the address it was issued to, before it expires. The bytes stream into the call's fmsg draft; nothing is staged
- * on this server. The client attaches the credential it presents to the MCP server (credentials: "include").
+ * Upload targets: PUT /mcp/uploads/{token}, issued as the path /uploads/{token} under the MCP address. A target takes
+ * one file: the size (and SHA-256, if declared) its call declared, from the address it was issued to, starting before
+ * it expires. The bytes stream into the call's fmsg draft; nothing is staged on this server. The client attaches the
+ * credential it presents to the MCP server (credentials: "include").
  */
 import { sameAddress } from "../address.js";
 import type { Caller } from "../context.js";
@@ -28,13 +29,13 @@ export async function receiveUpload(
   const verified = runtime.verifyTarget(token);
   if ("problem" in verified) {
     return verified.problem === "expired"
-      ? refuse(410, `this upload target expired at ${isoTime(verified.claims!.e)}; retry the tool call without requestState to get a new one`)
+      ? refuse(410, `this upload target expired at ${isoTime(verified.claims!.e)}; call the tool again without requestState to get a new one`)
       : refuse(404, "unknown upload target");
   }
   const claims: TargetClaims = verified.claims;
   if (!sameAddress(claims.a, caller.address)) return refuse(403, "this upload target was issued to another fmsg address");
   const call = runtime.status(claims.r)?.status;
   if (call === "done" || call === "ended") return refuse(409, "the tool call this upload target belongs to has already finished");
-  return streamIntoDraft(runtime, caller, { draft: claims.d, filename: claims.n, size: claims.s, sha256: claims.h, mimeType: claims.t, fileId: claims.f },
+  return streamIntoDraft(runtime, caller, { draft: claims.d, filename: claims.n, size: claims.s, ...(claims.h ? { sha256: claims.h } : {}), mimeType: claims.t, fileId: claims.f },
     request, encoding, signal, "target");
 }
