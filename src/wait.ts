@@ -28,7 +28,7 @@ export type WaitOptions = {
 export const INTERRUPTED_NOTE = "the server is restarting; call wait_for_message again with the after_id returned here; no messages are lost";
 
 export type Pending = { id: string; from: string; root_id: string | null };
-export type SkipReason = "own" | "reaction" | "no_reply" | "from_mismatch" | "other_thread";
+export type SkipReason = "own" | "reaction" | "edit" | "no_reply" | "from_mismatch" | "other_thread";
 export type Skipped = {
   id: string;
   reason: SkipReason;
@@ -255,6 +255,8 @@ export async function waitForMessage(
       };
       if (m.from.toLowerCase() === me) return skip("own");
       if (m.reaction !== null && m.reaction !== undefined) return skip("reaction");
+      // An FMSG-008 edit message is not a message to answer: its subject already reads as edited.
+      if (m.edit === true) return skip("edit");
       if (m.no_reply === true) return skip("no_reply");
       if (wantFrom !== undefined && m.from.toLowerCase() !== wantFrom) return skip("from_mismatch");
       let root: string;

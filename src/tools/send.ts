@@ -310,6 +310,39 @@ export const registerSendTools: Register = (server, deps) => {
       }),
   );
   server.registerTool(
+    "edit_message",
+    {
+      title: "Edit sent fmsg message",
+      description:
+        "Change the body of a message you sent, for example to fix a typo or rephrase it, or revert it to what you " +
+        "first sent. Give the complete new body, not a diff. Participants whose client supports edits see the new text " +
+        "marked as edited; the original stays stored and visible to them, so this does not retract anything. Only your " +
+        "own sent messages can be edited, and only the body: not the topic, recipients or attachments. Fails on drafts " +
+        "(change those before sending) and terminal messages.",
+      inputSchema: z.strictObject({
+        id: idSchema,
+        text: z.string().nullable().describe("the complete new body; null reverts to the original"),
+      }),
+      outputSchema: outputObject({
+        id: z.string(),
+        edit_id: z.string().nullable().describe("the edit now in force; null when the message has none"),
+        time: z.string().nullable(),
+        reverted: z.boolean(),
+        changed: z.boolean().describe("false when the body already read that way and nothing was sent"),
+      }),
+      // Destructive: an edit reaches the other participants at once, cannot be
+      // recalled and supersedes the previous text. Repeating it is a no-op.
+      annotations: { ...SENDS, idempotentHint: true },
+    },
+    async ({ id, text }, ctx) =>
+      withCaller(deps, ctx, async (caller, signal) => {
+        const result = await caller.client.edit(id, text, signal);
+        const structured = { id, edit_id: result.id, time: isoTime(result.time), reverted: text === null, changed: result.sent };
+        if (!result.sent) return ok(`Message ${id} already reads that way; nothing was sent`, structured);
+        return ok(text === null ? `Reverted message ${id} to its original body` : `Edited message ${id}`, structured);
+      }),
+  );
+  server.registerTool(
     "indicate",
     {
       title: "Show fmsg indicator",

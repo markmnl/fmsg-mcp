@@ -150,6 +150,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `delete_draft` | Discard an unsent draft |
 | `add_recipients` | Add `recipients` to a sent message (`add_to` is a deprecated alias) |
 | `react` | Set or clear your emoji reaction |
+| `edit_message` | Change the body of a message you sent, or revert it to the original (FMSG-008 edit; needs a host with FMSG-003 v0.5.0). Edited messages read as edited and carry `edited`; edit messages themselves are never listed |
 | `indicate` | Show the other participants a short-lived status on a message, such as ⏳ while working on a reply or ✍️ while composing (FMSG-006 indicator; `ttl` 1–120 s, default 60), kept up until you reply, react or mark it read (up to 5 minutes); an empty `emoji` clears it. Reading a message never shows one |
 | `mark_read` | Mark received messages read |
 | `download_attachment` | Fetch a small attachment inline: text as text, images as image blocks, other files as base64 resources; a wrong filename lists the names the message has |

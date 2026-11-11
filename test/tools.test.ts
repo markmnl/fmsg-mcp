@@ -49,7 +49,7 @@ describe("tools (stdio-shaped)", () => {
     }
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      "add_recipients", "create_draft", "delete_draft", "delivery_status", "download_attachment", "get_message", "get_thread", "indicate", "list_messages",
+      "add_recipients", "create_draft", "delete_draft", "delivery_status", "download_attachment", "edit_message", "get_message", "get_thread", "indicate", "list_messages",
       "list_sent", "mark_read", "react", "reply", "resolve_address", "send_draft", "send_message", "wait_for_message", "whoami",
     ]);
     const send = tools.find((t) => t.name === "send_message")!;
@@ -204,6 +204,40 @@ describe("tools (stdio-shaped)", () => {
     const blocks = /^(`{3,})\n([\s\S]*?)\n\1$/gmu;
     expect([...waiting.matchAll(blocks)].map(m => m[2])).toContain(body);
     expect(waiting.replace(blocks, "")).not.toContain(fakeHeader);
+  });
+
+  it("edit_message edits and reverts the caller's own message and hides edit messages", async () => {
+    const m = fake.seed({ from: ALICE, to: [BOB], topic: "typo", data: "see you their" });
+    const edited = structured<{ edit_id: string | null; changed: boolean; reverted: boolean }>(await call(h.client, "edit_message", { id: m.id, text: "see you there" }));
+    expect(edited).toMatchObject({ id: m.id, edit_id: expect.any(String), changed: true, reverted: false });
+    expect(fake.requests.at(-1)).toMatchObject({ method: "POST", path: `/fmsg/${m.id}/edit`, body: { data: "see you there" } });
+
+    // Repeating it sends nothing.
+    expect(structured(await call(h.client, "edit_message", { id: m.id, text: "see you there" }))).toMatchObject({ edit_id: edited.edit_id, changed: false });
+
+    // The message reads as edited and is marked so; the edit message itself is never listed.
+    const got = await call(h.client, "get_message", { id: m.id });
+    expect(text(got)).toContain("see you there");
+    expect(text(got)).toContain("Edited:");
+    expect(text(got)).not.toContain("see you their");
+    const sent = structured<{ messages: Array<{ id: string; edited: string | null; preview: string }> }>(await call(h.client, "list_sent", { include_reactions: true }));
+    expect(sent.messages.map((x) => x.id)).toEqual([m.id]);
+    expect(sent.messages[0]).toMatchObject({ preview: "see you there", edited: expect.any(String) });
+    const thread = await call(h.client, "get_thread", { id: m.id });
+    expect(text(thread)).toContain("see you there");
+
+    const reverted = structured(await call(h.client, "edit_message", { id: m.id, text: null }));
+    expect(reverted).toMatchObject({ edit_id: expect.any(String), changed: true, reverted: true });
+    expect(structured<{ messages: Array<{ edited: string | null; preview: string }> }>(await call(h.client, "list_sent", {})).messages[0])
+      .toMatchObject({ preview: "see you their", edited: null });
+    expect(structured(await call(h.client, "edit_message", { id: m.id, text: null }))).toMatchObject({ changed: false });
+
+    // Someone else's message cannot be edited, and their edit of it never arrives as a message.
+    const inbound = fake.seed({ from: BOB, to: [ALICE], data: "bob's words" });
+    expect((await call(h.client, "edit_message", { id: inbound.id, text: "mine now" })).isError).toBe(true);
+    fake.seed({ from: BOB, to: [ALICE], pid: inbound.id, type: "application/vnd.fmsg.edit", data: Buffer.alloc(4), edit: true, terminal: true, no_reply: true });
+    const inbox = structured<{ messages: Array<{ id: string }> }>(await call(h.client, "list_messages", { include_reactions: true }));
+    expect(inbox.messages.map((x) => x.id)).toEqual([inbound.id]);
   });
 
   it("add_recipients, react, mark_read and delivery_status", async () => {

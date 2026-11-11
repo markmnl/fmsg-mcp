@@ -144,6 +144,7 @@ export function messageLine(message: FmsgMessage, self?: string): string {
   if (message.no_reply) flags.push("no-reply");
   if (message.terminal) flags.push("terminal");
   if (typeof message.reaction === "string") flags.push(`reaction ${headerValue(message.reaction) || "(cleared)"}`);
+  if (message.edited) flags.push("edited");
   // Your own messages are never unread, unless you were also a recipient.
   const toSelf = [...message.to, ...(message.add_to ?? []).flatMap((b) => b.to ?? [])].some((a) => a.toLowerCase() === self?.toLowerCase());
   if (message.read === false && (toSelf || message.from.toLowerCase() !== self?.toLowerCase())) flags.push("unread");
@@ -177,6 +178,7 @@ export function messageHeader(message: FmsgMessage, threadTopic?: string | null,
   if (message.attachments?.length) {
     lines.push(`Attachments: ${sortAttachments(message.attachments).map((a) => `${headerValue(a.filename)} (${a.size} bytes, ${headerValue(attachmentType(a.filename))})`).join(", ")}`);
   }
+  if (message.edited) lines.push(`Edited: ${isoTime(message.edited.time) ?? "yes"} (the body below is the edited text)`);
   if (message.reactions?.length) {
     lines.push(`Reactions: ${message.reactions.map((r) => `${headerValue(r.emoji)} ${addressList(r.from)}`).join("; ")}`);
   }

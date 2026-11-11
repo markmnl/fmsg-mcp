@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import type { FmsgClient } from "./client.js";
-import { normalizeMessageId, parseFmsgJson } from "./message-id.js";
+import { editFields, normalizeMessageId, parseFmsgJson } from "./message-id.js";
 import type { FmsgMessage, WsEvent } from "./types.js";
 
 const expiries = new WeakMap<WebSocket, number>();
@@ -24,7 +24,7 @@ export function parseWsEvent(raw: WebSocket.RawData): WsEvent | undefined {
     const parsed = parseFmsgJson<{ type?: unknown; data?: FmsgMessage }>(raw.toString());
     if (!parsed || typeof parsed.type !== "string") return undefined;
     const data = parsed.data && typeof parsed.data === "object" && parsed.data.id !== undefined
-      ? { ...parsed.data, id: normalizeMessageId(parsed.data.id), reaction: parsed.data.reaction ?? null, reactions: parsed.data.reactions ?? [] }
+      ? { ...parsed.data, id: normalizeMessageId(parsed.data.id), reaction: parsed.data.reaction ?? null, reactions: parsed.data.reactions ?? [], ...editFields(parsed.data) }
       : undefined;
     return data ? { type: parsed.type, data } : { type: parsed.type };
   } catch {
