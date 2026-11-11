@@ -64,6 +64,17 @@ export type FmsgMessage = {
   /** Non-null when this message is itself a reaction. */
   reaction?: string | null;
   reactions?: ReactionGroup[];
+  /** True when this message is itself an FMSG-008 edit message. */
+  edit?: boolean;
+  /** The edit in force on this message; the host presents `short_text` and the body as edited. */
+  edited?: Edited | null;
+};
+
+export type Edited = {
+  id: string;
+  time: number;
+  /** Byte length of the edited body; null when the host could not apply the edit and presents the original. */
+  size: number | null;
 };
 
 export type ThreadBody = {
@@ -106,6 +117,8 @@ export type ThreadMessage = {
   message_sha256?: string;
   body?: ThreadBody;
   attachments?: ThreadAttachment[];
+  /** The FMSG-008 edit in force; `body` is then the edited body. */
+  edited?: Edited | null;
 };
 
 export type Thread = {
@@ -192,7 +205,15 @@ export type ReactResult = {
   time: number | null;
 };
 
-export type WsEventType = "new_msg" | "delivered" | "recipients_added" | "reaction";
+/** `id` is the edit message in force after the call; null when the message has none. */
+export type EditResult = {
+  id: string | null;
+  time: number | null;
+  /** False when the body already read that way and nothing was sent. */
+  sent: boolean;
+};
+
+export type WsEventType = "new_msg" | "delivered" | "recipients_added" | "reaction" | "edit";
 
 export type WsEvent = {
   type: WsEventType | string;

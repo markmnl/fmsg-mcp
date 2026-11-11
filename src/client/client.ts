@@ -1,5 +1,5 @@
 import { normalizeFmsgAddress } from "../address.js";
-import { normalizeMessageId, parseFmsgJson, stringifyWithIds } from "./message-id.js";
+import { editFields, normalizeMessageId, parseFmsgJson, stringifyWithIds } from "./message-id.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeApiUrl } from "./url.js";
 import { readBytes, withIdleTimeout } from "./stream.js";
@@ -14,6 +14,7 @@ import type {
   FmsgMessage,
   OutboundAttachment,
   ReactResult,
+  EditResult,
   SendInput,
   SendResult,
   StreamAttachment,
@@ -58,7 +59,7 @@ export type FmsgClientOptions = {
 };
 
 function withId(message: FmsgMessage, id: string): FmsgMessage {
-  return { ...message, id, terminal: message.terminal === true, reaction: message.reaction ?? null, reactions: message.reactions ?? [] };
+  return { ...message, id, terminal: message.terminal === true, reaction: message.reaction ?? null, reactions: message.reactions ?? [], ...editFields(message) };
 }
 
 type TokenRenewal = { promise: Promise<AccessToken>; abort: AbortController; waiters: number };
@@ -322,6 +323,26 @@ export class FmsgClient {
       signal,
     });
     return { id: mid, added: result.added ?? addTo.length };
+  }
+
+  /**
+   * Edits the body of the caller's own sent message (FMSG-008), or reverts it to the original when
+   * `data` is null. The host derives and sends the edit; nothing is sent when the body would not change.
+   */
+  async edit(id: string, data: string | null, signal?: AbortSignal): Promise<EditResult> {
+    const mid = normalizeMessageId(id);
+    const response = await this.request(`/fmsg/${encodeURIComponent(mid)}/edit`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ data: data === null ? null : redactSecrets(data).text }),
+      signal,
+    });
+    const body = parseFmsgJson<{ id?: unknown; time?: number | null }>(await response.text());
+    return {
+      id: body.id === undefined || body.id === null ? null : normalizeMessageId(body.id),
+      time: body.time ?? null,
+      sent: response.status === 201,
+    };
   }
 
   async react(id: string, emoji: string | null, signal?: AbortSignal): Promise<ReactResult> {

@@ -28,6 +28,10 @@ export type StoredMessage = {
   terminal: boolean;
   attachments: Array<{ filename: string; size: number; data: Buffer; type: string }>;
   reaction: string | null;
+  /** True when this message is itself an FMSG-008 edit message. */
+  edit?: boolean;
+  /** The edit in force on this message: the edit message and the edited body. */
+  edited?: { id: string; time: number; data: Buffer } | null;
   /** Sent deflate-compressed: `size` reports the compressed wire size while data holds the decoded body. */
   deflate: boolean;
   wireSize?: number;
@@ -189,6 +193,7 @@ export class FakeFmsgServer {
       terminal: input.terminal ?? false,
       attachments: (input.attachments ?? []).map((a) => ({ filename: a.filename, size: a.data.byteLength, data: a.data, type: a.type ?? "application/octet-stream" })),
       reaction: input.reaction ?? null,
+      ...(input.edit ? { edit: true } : {}),
       deflate: input.deflate ?? false,
       ...(input.wireSize !== undefined ? { wireSize: input.wireSize } : {}),
       readBy: new Map(),
@@ -219,9 +224,10 @@ export class FakeFmsgServer {
 
   private shortText(m: StoredMessage): string | undefined {
     if (!m.type.toLowerCase().startsWith("text/")) return undefined;
-    const text = m.data.toString("utf8");
+    const data = m.edited?.data ?? m.data;
+    const text = data.toString("utf8");
     if (Buffer.byteLength(text) <= this.shortTextBytes) return text;
-    let cut = m.data.subarray(0, this.shortTextBytes).toString("utf8");
+    let cut = data.subarray(0, this.shortTextBytes).toString("utf8");
     if (cut.endsWith("�")) cut = cut.slice(0, -1);
     return cut;
   }
@@ -270,6 +276,8 @@ export class FakeFmsgServer {
       attachments: m.attachments.map((a) => ({ size: a.size, filename: a.filename })),
       reaction: m.reaction,
       reactions: this.reactionsOf(m),
+      edit: m.edit === true,
+      edited: m.edited ? { id: m.edited.id, time: m.edited.time, size: m.edited.data.byteLength } : null,
     };
   }
 
@@ -472,6 +480,20 @@ export class FakeFmsgServer {
       for (const addr of this.participants(m)) for (const ws of this.sockets.get(addr) ?? []) ws.send(this.encode({ type: "reaction", data: this.listItem(m, addr) }));
       return this.json(res, 201, { id: r.id, time: r.time });
     }
+    if (method === "POST" && sub === "edit") {
+      const input = JSON.parse((await readBody(req)).toString("utf8")) as { data?: string | null };
+      log.body = input;
+      if (m.from !== subject) return this.json(res, 403, { error: "only the author may edit a message" });
+      if (m.time === null || m.terminal) return this.json(res, 409, { error: "cannot edit a draft or terminal message" });
+      const want = typeof input.data === "string" ? Buffer.from(input.data, "utf8") : null;
+      const unchanged = want === null ? !m.edited : (m.edited?.data ?? m.data).equals(want);
+      if (unchanged) return this.json(res, 200, { id: m.edited?.id ?? null, time: m.edited?.time ?? null });
+      const others = [...this.participants(m)].filter((a) => a !== subject);
+      const e = this.seed({ from: subject, to: others.length ? others : [subject], pid: m.id, type: "application/vnd.fmsg.edit", data: Buffer.alloc(want ? 4 : 0), edit: true, no_reply: true, terminal: true });
+      m.edited = want ? { id: e.id, time: e.time as number, data: want } : null;
+      for (const addr of this.participants(m)) for (const ws of this.sockets.get(addr) ?? []) ws.send(this.encode({ type: "edit", data: this.listItem(m, addr) }));
+      return this.json(res, 201, { id: e.id, time: e.time });
+    }
     if (method === "POST" && sub === "indicate") {
       const input = JSON.parse((await readBody(req)).toString("utf8")) as { emoji?: string; ttl?: number };
       log.body = input;
@@ -491,7 +513,7 @@ export class FakeFmsgServer {
     }
     if (method === "GET" && sub === "data") {
       res.writeHead(200, { "content-type": m.type || "application/octet-stream", "content-disposition": "attachment" });
-      return res.end(m.data);
+      return res.end(new URL(req.url ?? "", "http://x").searchParams.get("original") === "true" ? m.data : (m.edited?.data ?? m.data));
     }
     if (method === "POST" && sub === "attach") {
       // Like Go's net/http, close the connection rather than read a refused upload's body.
@@ -540,7 +562,7 @@ export class FakeFmsgServer {
         .map((x) => {
           if (!this.participants(x).has(subject)) return "[message not visible to you]";
           const when = x.time === null ? "draft" : new Date(x.time * 1000).toISOString();
-          const body = isText(x.type) ? x.data.toString("utf8") : `[non-text message: ${x.type}, ${x.data.byteLength} bytes]`;
+          const body = isText(x.type) ? (x.edited?.data ?? x.data).toString("utf8") : `[non-text message: ${x.type}, ${x.data.byteLength} bytes]`;
           return `--- ${x.from} ${when} ---\n${body}`;
         })
         .join("\n\n");
@@ -576,10 +598,11 @@ export class FakeFmsgServer {
           message_sha256: "00",
           body: {
             type: x.type,
-            size: x.wireSize ?? x.data.byteLength,
-            ...(inline ? { text: x.data.toString("utf8") } : { download: `/fmsg/${x.id}/data` }),
+            size: x.edited ? x.edited.data.byteLength : (x.wireSize ?? x.data.byteLength),
+            ...(inline ? { text: (x.edited?.data ?? x.data).toString("utf8") } : { download: `/fmsg/${x.id}/data` }),
             cacheable: false,
           },
+          ...(x.edited ? { edited: { id: x.edited.id, time: x.edited.time, size: x.edited.data.byteLength } } : {}),
           attachments: x.attachments.map((a, i) => ({ position: i, type: a.type, filename: a.filename, size: a.size, download: `/fmsg/${x.id}/attach/${encodeURIComponent(a.filename)}`, cacheable: false })),
         };
       });

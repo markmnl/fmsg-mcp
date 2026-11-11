@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- FMSG-008 edits. The new `edit_message` tool changes the body of a message the caller sent, given the
+  complete new text, or reverts it with `text: null`; repeating an edit sends nothing (`changed: false`).
+  The host derives and sends the edit and presents edited bodies itself, so lists, `get_message` and
+  `get_thread` read as edited; items add an optional `edited` time and headers an `Edited:` line. Edit
+  messages are hidden from `list_messages` and `list_sent` and skipped by `wait_for_message` (reason
+  `edit`). `FmsgClient.edit()` posts to `/fmsg/{id}/edit`; messages add `edit` and `edited`. Needs a
+  host implementing FMSG-003 v0.5.0; older hosts answer 404.
 - Tool annotations follow OpenAI's plugin guidelines ("false only for additive writes without
   destructive or irreversible effects"), after a directory review flagged them: `react`, `indicate`
   and `mark_read` are `destructiveHint: true` (a reaction or status reaches the other participants at

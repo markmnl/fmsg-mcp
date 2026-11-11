@@ -38,7 +38,7 @@ export const registerListTools: Register = (server, deps) => {
     async ({ limit, offset, include_reactions, unread_only }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const page = await caller.client.listInbox(limit, offset, signal);
-        const shown = page.filter((m) => (include_reactions || m.reaction === null || m.reaction === undefined) && (!unread_only || m.read === false));
+        const shown = page.filter((m) => m.edit !== true && (include_reactions || m.reaction === null || m.reaction === undefined) && (!unread_only || m.read === false));
         const structured = {
           messages: shown.map((m) => toItem(m, caller.address)),
           count: shown.length,
@@ -73,7 +73,7 @@ export const registerListTools: Register = (server, deps) => {
     async ({ limit, offset, include_reactions }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
         const page = await caller.client.listSent(limit, offset, signal);
-        const shown = page.filter((m) => include_reactions || m.reaction === null || m.reaction === undefined);
+        const shown = page.filter((m) => m.edit !== true && (include_reactions || m.reaction === null || m.reaction === undefined));
         const structured = {
           messages: shown.map((m) => ({ ...toItem(m, caller.address), delivery: deliveryOf(m) })),
           count: shown.length,

@@ -18,6 +18,8 @@ The canonical contract is the fmsg-webapi README and
 - Sending is draft → attach → send; the draft is deleted if a later step fails.
 - Size and acceptance limits are host configuration. Never hard-code or pre-warn about them; surface
   the host's 400/413 text and per-recipient delivery codes verbatim.
+- A message with `edit === true` *is* an FMSG-008 edit message (always hidden from lists and waits);
+  `edited != null` marks a message whose body the host already presents as edited.
 - A message with `reaction != null` *is* a reaction (hidden from lists). `terminal` messages reject
   replies, add-to and reactions (409). `no_reply` messages are never auto-replied.
 

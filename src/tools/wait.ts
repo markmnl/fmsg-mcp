@@ -71,7 +71,7 @@ export const registerWaitTools: Register = (server, deps) => {
         pending_ids: z.array(z.string()).optional().describe("ids of pending_other_threads, oldest first: read these before waiting again"),
         skipped: z.array(outputObject({
           id: z.string(),
-          reason: openEnum(["own", "reaction", "no_reply", "from_mismatch", "other_thread"]),
+          reason: openEnum(["own", "reaction", "edit", "no_reply", "from_mismatch", "other_thread"]),
           from: z.string().optional(),
           emoji: z.string().optional().describe("for reactions: the emoji (\"\" clears a reaction)"),
           reaction_to: z.string().nullable().optional().describe("for reactions: the message reacted to"),

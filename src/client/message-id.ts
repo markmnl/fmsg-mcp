@@ -76,3 +76,12 @@ export function stringifyWithIds(value: Record<string, unknown>, ids: Record<str
   const extra = entries.map(([k, v]) => `${JSON.stringify(k)}:${normalizeMessageId(v, k)}`).join(",");
   return base === "{}" ? `{${extra}}` : `${base.slice(0, -1)},${extra}}`;
 }
+
+/** FMSG-008 fields with defaults for hosts that predate them, and the edit message id as a string. */
+export function editFields(message: { edit?: unknown; edited?: unknown }): { edit: boolean; edited: import("./types.js").Edited | null } {
+  const e = message.edited as { id?: unknown; time?: unknown; size?: unknown } | null | undefined;
+  const edited = e && e.id !== undefined && e.id !== null && typeof e.time === "number"
+    ? { id: normalizeMessageId(e.id), time: e.time, size: typeof e.size === "number" ? e.size : null }
+    : null;
+  return { edit: message.edit === true, edited };
+}

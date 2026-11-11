@@ -116,6 +116,7 @@ export const messageItem = outputObject({
   attachments: z.array(attachmentItem).describe("sorted by filename, the same order in every tool"),
   reactions: z.array(outputObject({ emoji: z.string(), from: z.array(z.string()) })),
   reaction: z.string().nullable().optional().describe("the emoji when this message is itself a reaction (\"\" clears one); null otherwise"),
+  edited: z.string().nullable().optional().describe("ISO-8601 time its sender last edited the body, which is shown as edited; null when unedited"),
 });
 export type MessageItem = z.infer<typeof messageItem>;
 
@@ -141,6 +142,7 @@ export function toItem(m: FmsgMessage, self: string): MessageItem {
     attachments: sortAttachments(m.attachments).map((a) => ({ filename: a.filename, size: a.size, type: attachmentType(a.filename) })),
     reactions: (m.reactions ?? []).map((r) => ({ emoji: r.emoji, from: r.from })),
     reaction: m.reaction ?? null,
+    edited: m.edited ? isoTime(m.edited.time) : null,
   };
 }
 
