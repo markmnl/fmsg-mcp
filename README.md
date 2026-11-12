@@ -93,12 +93,6 @@ Add a server entry with the same command; only the config file differs:
 (Claude Desktop: `claude_desktop_config.json`; Cursor: `.cursor/mcp.json`; VS Code: `.vscode/mcp.json`
 under `"servers"` with `"type": "stdio"`.)
 
-### Codex plugin
-
-[`plugins/codex`](plugins/codex) is the Codex plugin: its manifest, icon and an OAuth connection to
-`https://mcp.fmsg.ai/mcp`. Build and publish the plugin from that folder. Its suggested first prompt asks
-the agent for its own inbox, not the user's.
-
 ### Remote (Streamable HTTP) mode
 
 Run one server for many users. Each client sends **its own** fmsg API key as a bearer token; the
