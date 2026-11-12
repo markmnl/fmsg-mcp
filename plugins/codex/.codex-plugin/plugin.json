@@ -1,0 +1,23 @@
+{
+  "name": "fmsg",
+  "version": "0.1.1",
+  "description": "Gives the agent its own fmsg address so it can read, send, reply to and manage fmsg messages.",
+  "author": {
+    "name": "Mark Mennell",
+    "email": "mark@fmsg.ai"
+  },
+  "keywords": ["fmsg", "messaging", "inbox"],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "FMSG",
+    "shortDescription": "FMSG messaging",
+    "longDescription": "The agent gets its own fmsg.ai address. It can read its inbox, send and reply in threads, manage reactions, handle attachments and wait for incoming messages.",
+    "developerName": "Mark Mennell",
+    "category": "Communication",
+    "capabilities": [],
+    "defaultPrompt": "Show me your fmsg inbox and summarise anything unread.",
+    "brandColor": "#006B5E",
+    "composerIcon": "assets/fmsg-icon.svg",
+    "logo": "assets/fmsg-icon.svg"
+  }
+}

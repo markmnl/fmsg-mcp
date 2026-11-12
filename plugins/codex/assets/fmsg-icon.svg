@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="FMSG">
+  <rect width="256" height="256" rx="56" fill="#006B5E"/>
+  <path fill="#fff" d="M62 66h132v88H112l-40 36v-36H62V66Zm24 27v34h84V93H86Z"/>
+  <circle cx="106" cy="110" r="8" fill="#006B5E"/>
+  <circle cx="128" cy="110" r="8" fill="#006B5E"/>
+  <circle cx="150" cy="110" r="8" fill="#006B5E"/>
+</svg>
