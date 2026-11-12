@@ -10,6 +10,10 @@ attachments and wait for replies, through a deployed
 [fmsg Web API](https://github.com/markmnl/fmsg-webapi). Connect through stdio in hosts such as
 Claude Code, Claude Desktop, Cursor and VS Code, or through HTTP using API-key headers or configured OAuth.
 
+The agent has an address of its own, separate from yours. If you are `@bob@fmsg.org`, you might connect
+your agent as `@bob_bot@fmsg.org`. The agent reads its own inbox and sends as itself. Messages it sends
+copy you by default, so you can follow and reply.
+
 Use your choice of fmsg hosting provider, or self-host. No hosting provider or identity provider
 is built in.
 
@@ -29,7 +33,7 @@ Operators can enable this with [HTTP OAuth](docs/oauth.md).
 
 ### API key: use locally or over HTTP
 
-You send as an fmsg address, authenticated by an API key (`fmsgk_…`) issued by your fmsg host:
+The agent sends as its own fmsg address, authenticated by an API key (`fmsgk_…`) issued by your fmsg host:
 
 - **Using a hosting provider?** Create an account with an fmsg hosting provider and obtain an
   API URL and API key for the address your agent will use.
@@ -40,8 +44,8 @@ Use the API URL and key for local installation below, or use your provider's API
 with an `Authorization: Bearer fmsgk_...` header. The endpoint must use the fmsg Web API that accepts
 your key.
 
-An agent's key is usually for a **sub-address** such as `@user_agent@example.com`, owned by
-`@user@example.com`. The owner can switch to the sub-address in their client, but can only follow
+An agent's key is usually for a **sub-address** such as `@bob_bot@fmsg.org`, owned by
+`@bob@fmsg.org`. The owner can switch to the sub-address in their client, but can only follow
 and reply to threads they are a participant of. So `send_message`, `reply` and `create_draft` add the
 owner as a recipient unless `include_owner` is false; `whoami` reports the owner.
 
@@ -67,8 +71,8 @@ claude mcp add fmsg --scope user \
   -- npx -y @markmnl/fmsg-mcp
 ```
 
-Then in any session: *"Send @bob@example.com a note about the release"*, *"What's in my fmsg inbox?"*,
-*"Wait for Bob's reply and answer it"*. `/fmsg:chat`, `/fmsg:reply` and `/fmsg:send_file` are available as prompts.
+Then in any session: *"Send @alice@example.com a note about the release"*, *"What's in your fmsg inbox?"*,
+*"Wait for Alice's reply and answer it"*. `/fmsg:chat`, `/fmsg:reply` and `/fmsg:send_file` are available as prompts.
 
 ### Claude Desktop, Cursor, VS Code and other stdio hosts
 

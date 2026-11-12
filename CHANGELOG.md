@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The agent normally has its own address, such as `@bob_bot@fmsg.org` for `@bob@fmsg.org`. The README
+  describes that setup and its example prompts ask about the agent's own inbox; the `chat` prompt replies
+  as the agent rather than on the user's behalf.
 - FMSG-008 edits. The new `edit_message` tool changes the body of a message the caller sent, given the
   complete new text, or reverts it with `text: null`; repeating an edit sends nothing (`changed: false`).
   The host derives and sends the edit and presents edited bodies itself, so lists, `get_message` and
