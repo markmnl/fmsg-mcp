@@ -54,7 +54,7 @@ describe("tools (stdio-shaped)", () => {
     ]);
     const send = tools.find((t) => t.name === "send_message")!;
     expect(send.annotations?.openWorldHint).toBe(true);
-    for (const name of ["send_message", "reply", "send_draft"]) {
+    for (const name of ["send_message", "reply", "send_draft", "edit_message"]) {
       expect(tools.find((t) => t.name === name)!.annotations?.destructiveHint, name).toBe(false);
     }
     expect(tools.find((t) => t.name === "delete_draft")!.annotations?.destructiveHint).toBe(true);

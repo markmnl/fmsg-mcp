@@ -13,7 +13,9 @@
   and `send_draft`: sending a message is additive, so these three are `destructiveHint: false` even
   though a sent message cannot be recalled. The earlier change that made `react`, `indicate` and
   `mark_read` destructive and `get_attachment_download_url` not read-only is reverted; those
-  annotations are as in 1.5.1. `delete_draft`, `add_recipients` and `edit_message` stay destructive.
+  annotations are as in 1.5.1. `edit_message` is non-destructive too: an edit is sent as a new
+  message, the original stays stored and `text: null` reverts it. `delete_draft` and `add_recipients`
+  stay destructive.
 - `send_message`, `reply` and `create_draft` take `files`: files the user shared in the chat, given by
   reference (ChatGPT's `openai/fileParams`, declared in each tool's `_meta`). The server downloads each
   one, from public HTTPS addresses only, hashes it, attaches the exact bytes and reports its sha256 in

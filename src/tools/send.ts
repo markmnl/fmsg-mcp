@@ -329,9 +329,10 @@ export const registerSendTools: Register = (server, deps) => {
         reverted: z.boolean(),
         changed: z.boolean().describe("false when the body already read that way and nothing was sent"),
       }),
-      // Destructive: an edit reaches the other participants at once, cannot be
-      // recalled and supersedes the previous text. Repeating it is a no-op.
-      annotations: { ...SENDS, idempotentHint: true },
+      // Not destructive: an edit is sent as a new message carrying the diff; the
+      // original stays stored and text: null reverts it, so nothing is lost.
+      // Repeating it is a no-op.
+      annotations: { ...SENDS_MESSAGE, idempotentHint: true },
     },
     async ({ id, text }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
