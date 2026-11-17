@@ -32,6 +32,10 @@ export type ToolDeps = {
 // flag an inbox read. SENDS stays open-world: a send can reach any fmsg address.
 export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 export const SENDS: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+// Sending a message is additive, so not destructive even though it cannot be
+// recalled (OpenAI plugin review: "Additive actions such as sending messages
+// are generally non-destructive, including when they cannot be recalled").
+export const SENDS_MESSAGE: ToolAnnotations = { ...SENDS, destructiveHint: false };
 
 export const idSchema = z.string().regex(/^[0-9]+$/u, "fmsg message ids are decimal integers").describe("fmsg message id");
 

@@ -9,7 +9,7 @@ import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
 import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, hostFilesResult, prepareAllAttachments, sendWithAttachments } from "./attachments.js";
 import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
-import { SENDS, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
+import { SENDS, SENDS_MESSAGE, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { parentReference, replyParent } from "./parent.js";
 import { WORKING_EMOJI } from "../indicators.js";
 import { threadRoot } from "./read.js";
@@ -154,7 +154,7 @@ export const registerSendTools: Register = (server, deps) => {
         files: hostFilesInput,
       }),
       outputSchema: sentOutput,
-      annotations: SENDS,
+      annotations: SENDS_MESSAGE,
       _meta: HOST_FILE_META,
     },
     async ({ to, topic, body, type, important, no_reply, include_owner, attachments, files }, ctx) =>
@@ -210,7 +210,7 @@ export const registerSendTools: Register = (server, deps) => {
         files: hostFilesInput,
       }),
       outputSchema: sentOutput,
-      annotations: SENDS,
+      annotations: SENDS_MESSAGE,
       _meta: HOST_FILE_META,
     },
     async ({ id, body, recipients, type, important, no_reply, allow_no_reply, include_owner, attachments, files }, ctx) =>
@@ -294,11 +294,10 @@ export const registerSendTools: Register = (server, deps) => {
         emoji: z.string().max(32).nullable().describe("a single emoji; null or empty clears your reaction"),
       }),
       outputSchema: outputObject({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
-      // Destructive (OpenAI's plugin guidelines): a reaction is a send the
-      // other participants receive at once and cannot be recalled, and it
-      // supersedes the sender's previous reaction. Earlier reaction messages
-      // stay; setting the same emoji again is a no-op.
-      annotations: { ...SENDS, idempotentHint: true },
+      // Not destructive: a reaction is one emoji that its sender changes or
+      // clears with another reaction, and it alters no one's messages, so hosts
+      // needn't ask before each one (maintainer decision).
+      annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
     },
     async ({ id, emoji }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {
@@ -361,9 +360,7 @@ export const registerSendTools: Register = (server, deps) => {
         ttl: z.number().describe("seconds; 0 when cleared"),
         cleared: z.boolean(),
       }),
-      // Destructive (OpenAI's plugin guidelines): the status is shown to the
-      // other participants at once and replaces the caller's previous one.
-      annotations: { ...SENDS, idempotentHint: true },
+      annotations: { ...SENDS, destructiveHint: false, idempotentHint: true },
     },
     async ({ id, emoji, ttl }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {

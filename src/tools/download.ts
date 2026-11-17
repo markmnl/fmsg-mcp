@@ -48,10 +48,7 @@ export const registerDownloadTool: Register = (server, deps) => {
       presigned: presignedOutput.partial().optional().describe("present when presigned was true"),
       ...untrustedNotice,
     }),
-    // Not read-only: with presigned it creates a short-lived single-use
-    // download link. Not destructive: it changes no messages. Closed-world:
-    // only the caller's own attachments. Reading needs only fmsg:read.
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: READ_ONLY,
   }, async ({ id, filename, presigned }, ctx) => withCaller(deps, ctx, async (caller, signal) => {
     const mid = normalizeMessageId(id);
     attachmentFilename(filename);
