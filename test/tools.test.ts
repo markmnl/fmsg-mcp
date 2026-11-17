@@ -53,8 +53,11 @@ describe("tools (stdio-shaped)", () => {
       "list_sent", "mark_read", "react", "reply", "resolve_address", "send_draft", "send_message", "wait_for_message", "whoami",
     ]);
     const send = tools.find((t) => t.name === "send_message")!;
-    expect(send.annotations?.destructiveHint).toBe(true);
     expect(send.annotations?.openWorldHint).toBe(true);
+    for (const name of ["send_message", "reply", "send_draft", "edit_message"]) {
+      expect(tools.find((t) => t.name === name)!.annotations?.destructiveHint, name).toBe(false);
+    }
+    expect(tools.find((t) => t.name === "delete_draft")!.annotations?.destructiveHint).toBe(true);
     expect(send.description).toContain("immutable");
     const thread = tools.find((t) => t.name === "get_thread")!;
     expect(thread.annotations?.readOnlyHint).toBe(true);
@@ -62,11 +65,8 @@ describe("tools (stdio-shaped)", () => {
     expect(tools.find((t) => t.name === "mark_read")!.annotations?.openWorldHint).toBe(false);
     expect(tools.find((t) => t.name === "create_draft")!.annotations?.openWorldHint).toBe(false);
     expect(tools.find((t) => t.name === "delete_draft")!.annotations?.openWorldHint).toBe(false);
-    // OpenAI's plugin guidelines: false only for additive writes without
-    // destructive or irreversible effects.
-    expect(tools.find((t) => t.name === "react")!.annotations?.destructiveHint).toBe(true);
-    expect(tools.find((t) => t.name === "indicate")!.annotations?.destructiveHint).toBe(true);
-    expect(tools.find((t) => t.name === "mark_read")!.annotations?.destructiveHint).toBe(true);
+    expect(tools.find((t) => t.name === "react")!.annotations?.destructiveHint).toBe(false);
+    expect(tools.find((t) => t.name === "indicate")!.annotations?.destructiveHint).toBe(false);
   });
 
   it("whoami and resolve_address", async () => {

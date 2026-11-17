@@ -6,7 +6,7 @@ import { addressList, headerValue, isoTime } from "../render.js";
 import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../upload.js";
 import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, hostFilesResult, prepareAllAttachments } from "./attachments.js";
 import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
-import { SENDS, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
+import { SENDS, SENDS_MESSAGE, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
 import { type ParentReference, parentReference, replyParent } from "./parent.js";
 import { threadRoot } from "./read.js";
 import {
@@ -131,7 +131,7 @@ export const registerDraftTools: Register = (server, deps) => {
         "If the host refuses it, its reason is returned verbatim and the message stays a draft.",
       inputSchema: z.strictObject({ id: idSchema.describe("the draft to send") }),
       outputSchema: sentOutput,
-      annotations: SENDS,
+      annotations: SENDS_MESSAGE,
     },
     async ({ id }, ctx) =>
       withCaller(deps, ctx, async (caller, signal) => {

@@ -12,12 +12,13 @@
   messages are hidden from `list_messages` and `list_sent` and skipped by `wait_for_message` (reason
   `edit`). `FmsgClient.edit()` posts to `/fmsg/{id}/edit`; messages add `edit` and `edited`. Needs a
   host implementing FMSG-003 v0.5.0; older hosts answer 404.
-- Tool annotations follow OpenAI's plugin guidelines ("false only for additive writes without
-  destructive or irreversible effects"), after a directory review flagged them: `react`, `indicate`
-  and `mark_read` are `destructiveHint: true` (a reaction or status reaches the other participants at
-  once and supersedes the previous one; marking read can't be undone here), so a host may ask before
-  each. `get_attachment_download_url` is no longer `readOnlyHint` (its presigned link is created on the
-  server); it still needs only `fmsg:read`.
+- Tool annotations follow OpenAI's plugin review (case 19380978), which named `send_message`, `reply`
+  and `send_draft`: sending a message is additive, so these three are `destructiveHint: false` even
+  though a sent message cannot be recalled. The earlier change that made `react`, `indicate` and
+  `mark_read` destructive and `get_attachment_download_url` not read-only is reverted; those
+  annotations are as in 1.5.1. `edit_message` is non-destructive too: an edit is sent as a new
+  message, the original stays stored and `text: null` reverts it. `delete_draft` and `add_recipients`
+  stay destructive.
 - `send_message`, `reply` and `create_draft` take `files`: files the user shared in the chat, given by
   reference (ChatGPT's `openai/fileParams`, declared in each tool's `_meta`). The server downloads each
   one, from public HTTPS addresses only, hashes it, attaches the exact bytes and reports its sha256 in
