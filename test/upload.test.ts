@@ -128,7 +128,7 @@ describe("HTTP attachment uploads", () => {
     expect(send.description).toContain("For large files, use create_draft instead: PUT");
     expect(send.description).toContain("Send files as they are; fmsg compresses them.");
     expect(JSON.stringify(send.inputSchema)).toContain("best effort: fine for small files (checked exact up to 16 KB). Always give sha256 with it. " +
-      "For anything larger use create_draft's upload URL (or a single-use link from get_attachment_upload_url). The host sets the size limit");
+      "For anything larger use create_draft's upload URL (or a single-use link from get_attachment_upload_url), or the MCP file-uploads extension");
     expect(JSON.stringify(send.inputSchema)).not.toContain("upload folder");
   });
 

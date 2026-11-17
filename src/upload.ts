@@ -127,10 +127,11 @@ export type UploadTracker = {
 };
 
 /** One file a link accepts: into which draft, under which name, and exactly which bytes. */
-export type UploadSlot = { draft: string; filename: string; size: number; sha256: string; mimeType: string; fileId?: string };
+/** `sha256` (lowercase hex) is checked when given; a FileInput may leave its digest out. */
+export type UploadSlot = { draft: string; filename: string; size: number; sha256?: string; mimeType: string; fileId?: string };
 
 /**
- * Stream one upload into a draft, refusing any body that is not exactly the slot's size and SHA-256, and a second
+ * Stream one upload into a draft, refusing any body that is not exactly the slot's size (and SHA-256, if given), and a second
  * upload after one succeeded. `noun` names the link in messages ("target", "link").
  */
 export async function streamIntoDraft(
@@ -156,7 +157,7 @@ export async function streamIntoDraft(
       return refuse(409, `this upload ${noun} was already used; each ${noun} takes one upload`);
     }
     const body = exactly(decodedUploadBody(stream, encoding), slot.size);
-    const uploaded = await caller.client.uploadAttachmentStream(slot.draft, { filename: slot.filename, stream: body, contentType: slot.mimeType, expectedSha256: slot.sha256 }, signal);
+    const uploaded = await caller.client.uploadAttachmentStream(slot.draft, { filename: slot.filename, stream: body, contentType: slot.mimeType, ...(slot.sha256 ? { expectedSha256: slot.sha256 } : {}) }, signal);
     tracker.recordVerified(key, uploaded.sha256);
     return Response.json({ ...(slot.fileId !== undefined ? { fileId: slot.fileId } : {}), filename: uploaded.filename, size: uploaded.size, sha256: uploaded.sha256 }, { status: 201 });
   } catch (error) {
@@ -165,7 +166,7 @@ export async function streamIntoDraft(
     if (error instanceof AttachmentChecksumError) {
       // A FileInput (fileId) declares its digest as base64url; other uploads give hex.
       const shown = (hex: string) => slot.fileId !== undefined ? Buffer.from(hex, "hex").toString("base64url") : hex;
-      return refuse(422, `the uploaded bytes do not match the ${slot.fileId !== undefined ? "file's declared digest" : "declared sha256"} ${shown(slot.sha256)} ` +
+      return refuse(422, `the uploaded bytes do not match the ${slot.fileId !== undefined ? "file's declared digest" : "declared sha256"} ${shown(slot.sha256 ?? "")} ` +
         `(got ${shown(error.actual)}); it was not kept`);
     }
     if (!drained) throw Object.assign(error instanceof Error ? error : new Error(String(error)), { undrained: true });
