@@ -7,7 +7,7 @@ import { CHECKSUM_HEADER, UPLOAD_ENCODINGS, draftUploadUrlTemplate } from "../up
 import { attachmentInput, base64Hint, draftWithAttachments, fileRoutes, hostFilesResult, prepareAllAttachments } from "./attachments.js";
 import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
 import { SENDS, SENDS_MESSAGE, type Register, attachmentItem, idSchema, ok, openEnum, outputObject, resolverFor, withCaller } from "./common.js";
-import { type ParentReference, parentReference, replyParent } from "./parent.js";
+import { type ParentReference, ownerLeftOffNote, replyParent, replyTarget } from "./parent.js";
 import { threadRoot } from "./read.js";
 import {
   IMMUTABLE, IMPORTANT, NO_REPLY, hintOutput, uploadSteps, redactionNote, replyRecipients, resolveRecipients, resolvedNote, resolvedOutput,
@@ -73,17 +73,20 @@ export const registerDraftTools: Register = (server, deps) => {
         let recipients: string[];
         let resolved: Array<{ input: string; address: string }>;
         let parentRef: ParentReference | undefined;
+        let ownerLeftOff = false;
         if (reply_to) {
           const parent = await replyParent(caller, reply_to, signal);
           if ("content" in parent) return parent;
           const target = replyRecipients(deps, caller, parent, to, allow_no_reply);
           if ("content" in target) return target;
-          ({ to: recipients, resolved } = target);
-          parentRef = parentReference(caller, parent);
+          resolved = target.resolved;
+          const reply = replyTarget(caller, parent, withOwner(caller, target.to, include_owner), caller.owner);
+          if ("content" in reply) return reply;
+          ({ to: recipients, ref: parentRef, ownerLeftOff } = reply);
         } else {
           ({ to: recipients, resolved } = resolveRecipients(to!, resolverFor(deps, caller)));
+          recipients = withOwner(caller, recipients, include_owner);
         }
-        recipients = withOwner(caller, recipients, include_owner);
         const { prepared: outbound, hostFiles } = await prepareAllAttachments(attachments, files, deps.config, deps.hostTransport, signal);
         const hint = base64Hint(attachments, routes);
         const draft = await draftWithAttachments(caller.client, {
@@ -115,7 +118,7 @@ export const registerDraftTools: Register = (server, deps) => {
           ...(hint ? { hint } : {}),
         };
         const what = pid ? `reply to message ${pid}` : `"${headerValue(draft.topic)}"`;
-        const text = `Created draft ${draft.id} (${what}) for ${addressList(recipients)}; not sent` +
+        const text = `Created draft ${draft.id} (${what}) for ${addressList(recipients)}; not sent` + ownerLeftOffNote(caller.owner, ownerLeftOff) +
           (structured.attachments.length ? `, with ${structured.attachments.map((a) => a.filename).join(", ")}` : "") +
           redactionNote(draft.redactions, draft.redacted) + resolvedNote(resolved) + `\n\n${next}`;
         return ok(withHint(text, hint), structured);

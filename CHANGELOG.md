@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Everyone on a reply must already have the message it replies to, whichever host they are on; hosts now
+  refuse other replies (409). An add-to batch is a message of its own: the original plus a wider audience.
+  So `reply` and `create_draft` with `reply_to` name the batch's hash as the parent when the recipients
+  include people it added, reply-all goes to those who have the message (no longer to everyone added in
+  any batch), and a reply including anyone else fails, pointing to `add_recipients`. A sub-address's owner
+  is left off a reply to a message they don't have, and the result says so.
 - The agent normally has its own address, such as `@alice_bot@fmsg.org` for `@alice@fmsg.org`. The README
   describes that setup and its example prompts ask about the agent's own inbox; the `chat` prompt replies
   as the agent rather than on the user's behalf.
