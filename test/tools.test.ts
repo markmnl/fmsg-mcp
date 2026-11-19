@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lstat, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { FakeFmsgServer } from "./fake-fmsg-server.js";
+import { FakeFmsgServer, fakeHash } from "./fake-fmsg-server.js";
 import { ALICE, BOB, CAROL, type Harness, call, configFor, connectHttpShaped, connectInMemory, structured, text } from "./helpers.js";
 import { StaticCallerProvider } from "../src/context.js";
 import { DATA_NOT_INSTRUCTIONS } from "../src/render.js";
@@ -165,9 +165,17 @@ describe("tools (stdio-shaped)", () => {
   it("reply defaults to reply-all and enforces terminal / no-reply", async () => {
     const root = fake.seed({ from: BOB, to: [ALICE, CAROL], topic: "t", data: "root" });
     root.add_to.push({ batch_id: "5000", add_to_from: BOB, to: ["@Dave@example.org"], to_delivery: [], time: 1 });
-    const r = structured<{ to: string[]; parent_id: string }>(await call(h.client, "reply", { id: root.id, body: "hi all" }));
-    expect(r.to.sort()).toEqual([BOB, CAROL, "@Dave@example.org"].sort());   // self excluded case-insensitively, case kept
+    const r = structured<{ id: string; to: string[]; parent_id: string }>(await call(h.client, "reply", { id: root.id, body: "hi all" }));
+    expect(r.to.sort()).toEqual([BOB, CAROL].sort());   // those who hold the message; self excluded
     expect(r.parent_id).toBe(root.id);
+    expect(fake.messages.get(r.id)!.psha256 ?? null).toBeNull();
+    // Someone added must be replied to through their add-to batch, which holds everyone on the reply.
+    const toDave = structured<{ id: string; to: string[] }>(await call(h.client, "reply", { id: root.id, body: "dave too", recipients: [BOB, "@dave@example.org"] }));
+    expect(fake.messages.get(toDave.id)).toMatchObject({ pid: root.id, psha256: fakeHash("batch", "5000") });
+    // Nobody can be brought in by a reply.
+    const stranger = await call(h.client, "reply", { id: root.id, body: "x", recipients: [BOB, "@erin@example.org"] });
+    expect(stranger.isError).toBe(true);
+    expect(text(stranger)).toContain("add_recipients");
     const narrowed = structured<{ to: string[] }>(await call(h.client, "reply", { id: root.id, body: "just bob", recipients: [BOB] }));
     expect(narrowed.to).toEqual([BOB]);
 
@@ -636,7 +644,12 @@ describe("sub-address callers", () => {
       .toEqual(["@ALICE@example.com", BOB]);
 
     const fromBob = fake.seed({ from: BOB, to: [AGENT], topic: "q", data: "?" });
-    expect(structured<{ to: string[] }>(await call(h.client, "reply", { id: fromBob.id, body: "a" })).to).toEqual([BOB, ALICE]);
+    // The owner doesn't have bob's message to the agent, so a reply can't go to them.
+    const toBob = await call(h.client, "reply", { id: fromBob.id, body: "a" });
+    expect(structured<{ to: string[] }>(toBob).to).toEqual([BOB]);
+    expect(text(toBob)).toContain(`not to ${ALICE}`);
+    const withAlice = fake.seed({ from: BOB, to: [AGENT, ALICE], topic: "q3", data: "?" });
+    expect(structured<{ to: string[] }>(await call(h.client, "reply", { id: withAlice.id, body: "a" })).to).toEqual([BOB, ALICE]);
     expect(structured<{ to: string[] }>(await call(h.client, "reply", { id: fromBob.id, body: "a", include_owner: false })).to).toEqual([BOB]);
     const fromAlice = fake.seed({ from: ALICE, to: [AGENT, BOB], topic: "q2", data: "?" });
     expect(structured<{ to: string[] }>(await call(h.client, "reply", { id: fromAlice.id, body: "a" })).to).toEqual([ALICE, BOB]);

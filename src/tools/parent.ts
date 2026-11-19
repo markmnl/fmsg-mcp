@@ -32,6 +32,69 @@ export function parentReference(caller: Pick<Caller, "address">, parent: FmsgMes
   return typeof hash === "string" && SHA256_HEX.test(hash) ? { pid: parent.id, parentSha256: hash.toLowerCase() } : { pid: parent.id };
 }
 
+type AddToBatch = NonNullable<FmsgMessage["add_to"]>[number];
+
+/**
+ * Who holds a message: its sender and recipients. An add-to batch is a message of its own, the original's contents
+ * with a wider audience, so its holders are also the batch's adder and the recipients it added.
+ */
+export function holdersOf(message: FmsgMessage, batch?: AddToBatch): string[] {
+  const seen = new Map<string, string>();
+  const add = (addr?: string) => {
+    if (addr && !seen.has(addr.toLowerCase())) seen.set(addr.toLowerCase(), addr);
+  };
+  add(message.from);
+  for (const a of message.to) add(a);
+  if (batch) {
+    add(batch.add_to_from);
+    for (const a of batch.to ?? []) add(a);
+  }
+  return [...seen.values()];
+}
+
+/** The batch that added the caller to `message`, when they were only added. */
+export function callerBatch(caller: Pick<Caller, "address">, message: FmsgMessage): AddToBatch | undefined {
+  if (!addedOnly(caller, message)) return undefined;
+  return (message.add_to ?? []).find((b) => (b.to ?? []).some((a) => sameAddress(a, caller.address)));
+}
+
+/**
+ * The parent a reply to `parent` names so that everyone on it holds that parent: to reply to a message, you and
+ * everyone on your reply must have it, whichever host they are on. That is the message itself, or the add-to batch
+ * that brought in the people added (the caller's own batch when they were only added). An error result when no
+ * one message is held by them all; `owner` is the caller's owner, dropped rather than failing when they don't hold it.
+ */
+export function replyTarget(
+  caller: Pick<Caller, "address">, parent: FmsgMessage, to: string[], owner?: string,
+): { to: string[]; ref: ParentReference; ownerLeftOff: boolean } | CallToolResult {
+  const hashed = (b: AddToBatch) => typeof b.sha256 === "string" && SHA256_HEX.test(b.sha256);
+  const own = callerBatch(caller, parent);
+  // Added only, the caller holds just their batch; otherwise the message, or any batch of it.
+  const candidates: Array<AddToBatch | undefined> = own ? [own] : [undefined, ...(parent.add_to ?? []).filter(hashed)];
+  const fits = (b: AddToBatch | undefined, recipients: string[]) => {
+    const held = new Set(holdersOf(parent, b).map((a) => a.toLowerCase()));
+    return recipients.every((a) => held.has(a.toLowerCase()));
+  };
+  const isOwner = (a: string) => owner !== undefined && sameAddress(a, owner);
+  for (const recipients of to.some(isOwner) ? [to, to.filter((a) => !isOwner(a))] : [to]) {
+    if (!recipients.length) continue;
+    const i = candidates.findIndex((b) => fits(b, recipients));
+    if (i < 0) continue;
+    const b = candidates[i];
+    // A host that gives no batch hash predates the rule: the id alone is all there is to send.
+    const ownerLeftOff = recipients.length < to.length;
+    return { to: recipients, ownerLeftOff, ref: b && hashed(b) ? { pid: parent.id, parentSha256: b.sha256!.toLowerCase() } : { pid: parent.id } };
+  }
+  const held = new Set(holdersOf(parent, own).map((a) => a.toLowerCase()));
+  const missing = to.filter((a) => !held.has(a.toLowerCase()) && !isOwner(a));
+  return toolError(
+    `everyone on a reply must have the message it replies to: ${missing.join(", ")} ` +
+    `${missing.length === 1 ? "doesn't" : "don't"} have message ${parent.id}` +
+    (own ? "" : ", or any one add-to of it with all of them") +
+    `. Add them first with add_recipients, then reply, or leave them off.`,
+  );
+}
+
 /** Inbox pages searched for the message the caller was added to; only on the error path. */
 const SEARCH_PAGES = 5;
 const PAGE_SIZE = 100;
@@ -84,4 +147,9 @@ export async function replyParent(caller: Caller, id: string, signal: AbortSigna
     if (added) return notParticipantError(id, added);
     throw error;
   }
+}
+
+/** The note for a reply that left the caller's owner off because they don't have the message replied to. */
+export function ownerLeftOffNote(owner: string | undefined, leftOff: boolean): string {
+  return leftOff && owner ? ` (not to ${owner}: they don't have the message replied to; add them to it with add_recipients first to include them)` : "";
 }

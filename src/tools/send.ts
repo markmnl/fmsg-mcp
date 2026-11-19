@@ -6,11 +6,11 @@ import type { Config } from "../config.js";
 import type { Caller } from "../context.js";
 import { toolError } from "../errors.js";
 import { withOwner } from "../owner.js";
-import { addressList, addressText, attachmentType, headerValue, isoTime, participantsOf, sortAttachments } from "../render.js";
+import { addressList, addressText, attachmentType, headerValue, isoTime, sortAttachments } from "../render.js";
 import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, hostFilesResult, prepareAllAttachments, sendWithAttachments } from "./attachments.js";
 import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
 import { SENDS, SENDS_MESSAGE, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
-import { parentReference, replyParent } from "./parent.js";
+import { callerBatch, holdersOf, ownerLeftOffNote, replyParent, replyTarget } from "./parent.js";
 import { WORKING_EMOJI } from "../indicators.js";
 import { threadRoot } from "./read.js";
 
@@ -75,7 +75,8 @@ export function sentAttachments(sent: Array<{ filename: string; size: number }>,
 }
 
 /**
- * Who a reply goes to: the given recipients, or everyone on the parent except the caller. Returns an error result
+ * Who a reply goes to: the given recipients, or everyone else who holds the parent (the message, or the add-to batch
+ * that added the caller). Returns an error result
  * when the parent is terminal, asked for no replies (unless allowed) or has nobody else to reply to.
  */
 export function replyRecipients(
@@ -88,7 +89,7 @@ export function replyRecipients(
   }
   const result = recipients?.length
     ? resolveRecipients(recipients, resolverFor(deps, caller))
-    : { to: participantsOf(parent).filter((a) => !sameAddress(a, caller.address)), resolved: [] };
+    : { to: holdersOf(parent, callerBatch(caller, parent)).filter((a) => !sameAddress(a, caller.address)), resolved: [] };
   if (result.to.length === 0) return toolError(`message ${id} has no other participants to reply to; pass recipients`);
   return result;
 }
@@ -193,9 +194,11 @@ export const registerSendTools: Register = (server, deps) => {
       title: "Reply in fmsg thread",
       description:
         `Send an immediate reply to a message (linking it into that thread). ${IMMUTABLE} ` +
-        "By default the reply goes to everyone on the parent message — its sender, recipients and anyone added later — " +
-        "except you; pass recipients to narrow or widen that. If you were added to the message after it was sent, you can " +
-        "reply to it but not to earlier messages in its thread. Fails if the parent is terminal (no replies possible); " +
+        "Everyone on a reply must already have the message it replies to. By default the reply goes to everyone else " +
+        "who has it: its sender and recipients, or, if you were added to it later, also those added with you. Pass " +
+        "recipients to narrow that, or to include people added to it later (the reply then goes through their add-to); " +
+        "anyone else must be added with add_recipients first. If you were added to the message after it was sent, you " +
+        "can reply to it but not to earlier messages in its thread. Fails if the parent is terminal (no replies possible); " +
         `a parent marked no-reply is refused unless allow_no_reply is true. Secrets are redacted. ${guidance}`,
       inputSchema: z.strictObject({
         id: idSchema.describe("message to reply to"),
@@ -220,10 +223,12 @@ export const registerSendTools: Register = (server, deps) => {
         const target = replyRecipients(deps, caller, parent, recipients, allow_no_reply);
         if ("content" in target) return target;
         const { resolved } = target;
-        const to = withOwner(caller, target.to, include_owner);
+        const reply = replyTarget(caller, parent, withOwner(caller, target.to, include_owner), caller.owner);
+        if ("content" in reply) return reply;
+        const { to } = reply;
         const { prepared: outbound, hostFiles } = await prepareAllAttachments(attachments, files, deps.config, deps.hostTransport, signal);
         const hint = base64Hint(attachments, routes);
-        const sent = await sendWithAttachments(caller.client, { to, ...parentReference(caller, parent), body, type, important, noReply: no_reply }, outbound, signal);
+        const sent = await sendWithAttachments(caller.client, { to, ...reply.ref, body, type, important, noReply: no_reply }, outbound, signal);
         // The reply is already sent: a failed root lookup only leaves the topic unknown.
         const root = await threadRoot(caller.client, parent, signal).catch(() => ({ id: null, topic: null }));
         deps.indicators.replied(caller, parent.id, root.id);
@@ -245,6 +250,7 @@ export const registerSendTools: Register = (server, deps) => {
         };
         const topic = structured.thread_topic ? ` in "${headerValue(structured.thread_topic)}"` : "";
         const text = `Sent reply ${sent.id} to message ${parent.id}${topic} for ${addressList(to)} at ${structured.time ?? "?"}` +
+          ownerLeftOffNote(caller.owner, reply.ownerLeftOff) +
           redactionNote(structured.redactions, structured.redacted) + resolvedNote(resolved);
         return ok(withHint(text, hint), structured);
       }),
