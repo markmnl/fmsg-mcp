@@ -10,6 +10,7 @@ import {
 import { ApiKeyCallerProvider, FMSG_SCOPE } from "./auth.js";
 import type { Config } from "./config.js";
 import { createFmsgMcpServer } from "./server.js";
+import { searchAvailable } from "./search-support.js";
 import { OAuthCallerProvider } from "./oauth/provider.js";
 import { invalidToken, insufficientScope, missingToken, notBearer, OAuthRequestError, oauthErrorResponse, oauthRequestState, type OAuthRequestState } from "./oauth/errors.js";
 import { MESSAGING_SCOPES, READ_SCOPE, WRITE_SCOPE, requestScopes } from "./oauth/scopes.js";
@@ -229,13 +230,14 @@ export function createHttpServer(config: Config, log: (line: string) => void = (
   const mcpHandler = (provider: CallerProvider, address: (authInfo: AuthInfo) => string) => {
     const indicators = new IndicatorRegistry();
     registries.push(indicators);
-    return createMcpHandler(({ authInfo }) =>
+    return createMcpHandler(async ({ authInfo }) =>
       createFmsgMcpServer(provider, config, {
         ...(authInfo ? { address: address(authInfo) } : {}),
         ...(typeof authInfo?.extra?.owner === "string" ? { owner: authInfo.extra.owner } : {}),
         shutdown: shutdown.signal,
         ...(links ? { links } : {}),
         indicators,
+        search: await searchAvailable(provider, authInfo),
       }),
       { onerror: (error) => safeLog(`MCP transport failed: ${error instanceof Error ? error.message : String(error)}`) },
     );

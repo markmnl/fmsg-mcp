@@ -44,7 +44,7 @@ export function maxMessageId(ids: Iterable<string>): string | undefined {
 }
 
 /** JSON keys whose numeric values are int64 ids on the fmsg wire. */
-const ID_KEYS = new Set(["id", "pid", "batch_id", "root_id", "trigger_id"]);
+const ID_KEYS = new Set(["id", "pid", "batch_id", "root_id", "trigger_id", "root"]);
 
 /**
  * Parse fmsg JSON, converting id fields to exact decimal strings using the

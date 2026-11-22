@@ -145,6 +145,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `resolve_address` | Turn a short name into `@user@domain` (directory, then default domain) |
 | `list_messages` | Inbox, newest first, with previews, attachment types and `size` (`compressed` marks a body sent deflated); reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |
+| `search_messages` | Find threads by the words in their topic, addresses, attachment names or text body, with `unread_only`, `with_attachments`, `drafts_only` and `in_trash` filters; each result summarises the thread and shows where the words matched. Listed only when the fmsg Web API implements the optional `GET /fmsg/search`, which this server checks per Web API and rechecks every 10 minutes |
 | `get_message` | One message with headers, full text body, attachments, reactions and, for a reply, the root's `thread_topic` |
 | `get_thread` | The lineage from the thread root to a message (`scope: "lineage"`; other replies in the thread are not included), with gaps for messages you cannot see, per-message flags and added recipients, the root's `thread_topic`, and a `next` step that never suggests replying to a terminal or no-reply message |
 | `send_message` | Start a new thread; sends immediately (fmsg messages are immutable) |

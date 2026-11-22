@@ -16,6 +16,8 @@ import { registerDraftTools } from "./tools/draft.js";
 import { registerWaitTools } from "./tools/wait.js";
 import { registerSaveTool } from "./tools/save.js";
 import { registerDownloadTool } from "./tools/download.js";
+import { registerSearchTool } from "./tools/search.js";
+import type { SearchSupportCache } from "./search-support.js";
 import { VERSION } from "./version.js";
 import type { PresignedLinks } from "./links.js";
 import { IndicatorRegistry } from "./indicators.js";
@@ -40,6 +42,13 @@ export type CreateServerOptions = {
   indicators?: IndicatorRegistry;
   /** Fetches files given by reference (tests substitute it). */
   hostTransport?: HostTransport;
+  /**
+   * List search_messages: the Web API implements the optional GET /fmsg/search. The transports find this out before
+   * building the server (see searchAvailable), so the factory itself stays free of I/O.
+   */
+  search?: boolean;
+  /** Where search_messages records that a host refused search (tests substitute it). */
+  searchSupport?: SearchSupportCache;
 };
 
 /**
@@ -52,6 +61,7 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
     ...(options.owner ? { owner: options.owner } : {}),
     ...(config.defaultDomain ? { defaultDomain: config.defaultDomain } : {}),
     files: fileRoutes(config, Boolean(options.links)),
+    search: options.search === true,
   });
   const server = new McpServer({ name: SERVER_NAME, title: "fmsg", version: VERSION }, { instructions });
   const includeOwner = includeOwnerSchema(options.address, options.owner);
@@ -77,6 +87,7 @@ export function createFmsgMcpServer(provider: CallerProvider, config: Config, op
   registerSendTools(server, deps);
   registerDraftTools(server, deps);
   registerWaitTools(server, deps);
+  if (options.search) registerSearchTool(options.searchSupport)(server, deps);
   registerResources(server, deps);
   registerPrompts(server, fileRoutes(config, Boolean(options.links)));
   return server;

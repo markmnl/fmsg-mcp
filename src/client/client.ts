@@ -15,6 +15,10 @@ import type {
   OutboundAttachment,
   ReactResult,
   EditResult,
+  SearchParams,
+  SearchResult,
+  SearchSupport,
+  SearchThread,
   SendInput,
   SendResult,
   StreamAttachment,
@@ -116,6 +120,11 @@ export class FmsgClient {
   /** The address that owns the authenticated sub-address, or undefined when acting as an owner's own address. */
   async owner(signal?: AbortSignal): Promise<string | undefined> {
     return (await this.getToken(false, signal)).owner;
+  }
+
+  /** Whether a Web API access token is already in hand, so a request needs no token exchange first. */
+  hasToken(): boolean {
+    return this.token !== undefined && this.token.expiresAtMs > Date.now();
   }
 
   async getToken(force = false, signal?: AbortSignal): Promise<AccessToken> {
@@ -233,6 +242,56 @@ export class FmsgClient {
     const items = await this.json<FmsgMessage[]>(`/fmsg/sent?limit=${limit}&offset=${offset}`, { signal });
     if (!Array.isArray(items)) throw new Error("sent response is not an array");
     return items.map((m) => withId(m, normalizeMessageId(m.id)));
+  }
+
+  /**
+   * Find threads by words with `GET /fmsg/search`, an optional Web API endpoint (501 or 404 where it is not
+   * implemented). Thread roots and match ids come back as message id strings.
+   */
+  async search(params: SearchParams, signal?: AbortSignal): Promise<SearchResult> {
+    const query = new URLSearchParams();
+    query.set("q", params.q ?? "");
+    if (params.sort) query.set("sort", params.sort);
+    if (params.files) query.set("files", "true");
+    if (params.unread) query.set("unread", "true");
+    if (params.drafts) query.set("scope", "drafts");
+    if (params.trash) query.set("trash", "only");
+    if (params.limit !== undefined) query.set("limit", String(params.limit));
+    if (params.offset !== undefined) query.set("offset", String(params.offset));
+    const body = await this.json<Partial<{ total: number; next_offset: number | null; terms: string[]; threads: Array<{ root: unknown; time?: number | null; match?: { id: unknown; field?: string; text?: string } | null }>; messages: FmsgMessage[] }>>(
+      `/fmsg/search?${query.toString()}`, { signal });
+    if (!body || typeof body !== "object" || !Array.isArray(body.threads) || !Array.isArray(body.messages)) {
+      throw new Error("search response is not a search result");
+    }
+    const threads: SearchThread[] = body.threads.map((t) => ({
+      root: normalizeMessageId(t.root, "thread root"),
+      time: typeof t.time === "number" ? t.time : null,
+      match: t.match ? { id: normalizeMessageId(t.match.id), field: String(t.match.field ?? ""), text: String(t.match.text ?? "") } : null,
+    }));
+    return {
+      total: typeof body.total === "number" ? body.total : threads.length,
+      next_offset: typeof body.next_offset === "number" ? body.next_offset : null,
+      terms: Array.isArray(body.terms) ? body.terms.map(String) : [],
+      threads,
+      messages: body.messages.map((m) => withId(m, normalizeMessageId(m.id))),
+    };
+  }
+
+  /**
+   * Whether the Web API implements `GET /fmsg/search`. A query with no words (only punctuation) answers 200 with no
+   * threads where search is implemented, without searching anything. 501 (not implemented) and 404/405 (no such
+   * route) mean no; an older Web API takes the path as a message id and answers 400. Anything else (network errors,
+   * authentication, 5xx) can't tell.
+   */
+  async searchSupported(signal?: AbortSignal): Promise<SearchSupport> {
+    try {
+      const response = await this.request("/fmsg/search?q=-&limit=1", { ...(signal ? { signal } : {}) });
+      await response.body?.cancel();
+      return "yes";
+    } catch (error) {
+      if (error instanceof FmsgHttpError && [400, 404, 405, 501].includes(error.status)) return "no";
+      return "unknown";
+    }
   }
 
   async getMessage(id: string, signal?: AbortSignal): Promise<FmsgMessage> {

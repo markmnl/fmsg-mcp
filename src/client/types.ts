@@ -219,3 +219,50 @@ export type WsEvent = {
   type: WsEventType | string;
   data?: FmsgMessage;
 };
+
+/** Filters for `GET /fmsg/search`, an optional Web API endpoint. */
+export type SearchParams = {
+  /** Words to find; empty lists every thread the filters allow. */
+  q?: string;
+  sort?: "newest" | "oldest";
+  /** Only threads with an attachment. */
+  files?: boolean;
+  /** Only threads with a message the caller hasn't read. */
+  unread?: boolean;
+  /** Only threads with one of the caller's drafts. */
+  drafts?: boolean;
+  /** Only threads with something in the caller's trash. */
+  trash?: boolean;
+  limit?: number;
+  offset?: number;
+};
+
+export type SearchMatch = {
+  /** The newest message of the thread that has the words. */
+  id: string;
+  /** Where the words were found: body, topic, file, from or to. */
+  field: string;
+  text: string;
+};
+
+export type SearchThread = {
+  root: string;
+  /** The newest message's time (POSIX seconds); null for a thread of drafts. */
+  time: number | null;
+  /** Null when there were no words to find. */
+  match: SearchMatch | null;
+};
+
+export type SearchResult = {
+  /** Matching threads over all pages. */
+  total: number;
+  next_offset: number | null;
+  /** The words of q as matched. */
+  terms: string[];
+  threads: SearchThread[];
+  /** Every message of those threads, shaped as GET /fmsg lists them. */
+  messages: FmsgMessage[];
+};
+
+/** Whether the Web API implements search: "unknown" when the probe could not tell. */
+export type SearchSupport = "yes" | "no" | "unknown";
