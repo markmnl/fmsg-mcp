@@ -68,6 +68,8 @@ export type FmsgMessage = {
   edit?: boolean;
   /** The edit in force on this message; the host presents `short_text` and the body as edited. */
   edited?: Edited | null;
+  /** Where the caller's trash holds this message, when the host says (search results include trashed messages). */
+  trash?: "message" | "thread" | null;
 };
 
 export type Edited = {

@@ -11,6 +11,8 @@ import type { AccessToken } from "../src/client/types.js";
 
 export type StoredMessage = {
   id: string;
+  /** In the subject's trash (only search reports it). */
+  trash?: "message" | "thread" | null;
   version: number;
   pid: string | null;
   from: string;
@@ -248,14 +250,18 @@ export class FakeFmsgServer {
       if (!threads.has(rootOf(m))) threads.set(rootOf(m), []);
       threads.get(rootOf(m))!.push(m);
     }
-    const counted = (m: StoredMessage) => m.reaction === null && !m.edit;
+    const inTrash = params.get("trash") === "only";
+    // As the contract says: a thread's messages include edits and trashed ones; reactions are left out.
+    const member = (m: StoredMessage) => m.reaction === null;
+    const counted = (m: StoredMessage) => member(m) && !m.edit && (inTrash || !m.trash);
     const unread = (m: StoredMessage) => m.time !== null && m.from !== subject && !m.readBy.has(subject);
     const found = [...threads.entries()].map(([root, members]) => {
       const shown = members.filter(counted);
       const match = terms.length ? shown.filter(hits).sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? 1 : -1))[0] : undefined;
       const times = shown.map((m) => m.time).filter((t): t is number => t !== null);
-      return { root, shown, match, time: times.length ? Math.max(...times) : null };
+      return { root, members: members.filter(member), shown, match, time: times.length ? Math.max(...times) : null };
     }).filter((t) => t.shown.length && (!terms.length || t.match)
+      && (!inTrash || t.shown.some((m) => m.trash))
       && (params.get("files") !== "true" || t.shown.some((m) => m.attachments.length))
       && (params.get("unread") !== "true" || t.shown.some(unread))
       && (params.get("scope") !== "drafts" || t.shown.some((m) => m.time === null)));
@@ -273,7 +279,7 @@ export class FakeFmsgServer {
         const [field, text] = fields(t.match).find(([, x]) => terms.some((term) => words(x).some((w) => w.startsWith(term))))!;
         return { root: t.root, time: t.time, match: { id: t.match.id, field, text: text.slice(0, 200) } };
       }),
-      messages: page.flatMap((t) => t.shown).map((m) => this.listItem(m, subject)),
+      messages: page.flatMap((t) => t.members).map((m) => ({ ...this.listItem(m, subject), trash: m.trash ?? null })),
     };
   }
 

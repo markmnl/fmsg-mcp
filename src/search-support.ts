@@ -29,6 +29,16 @@ export class SearchSupportCache {
     return this.known.get(apiUrl)?.supported;
   }
 
+  /** Ask apiUrl again in the background, unless already asking; the answer is remembered for the next caller. */
+  refresh(apiUrl: string, probe: (signal: AbortSignal) => Promise<SearchSupport>): void {
+    void this.supported(apiUrl, probe);
+  }
+
+  /** The probe under way for apiUrl, if any (for tests). */
+  pendingFor(apiUrl: string): Promise<SearchSupport> | undefined {
+    return this.pending.get(apiUrl);
+  }
+
   /**
    * Whether apiUrl implements search: the remembered answer, else the result of probe (shared by concurrent callers
    * and bounded by the timeout). Never rejects.
@@ -41,12 +51,14 @@ export class SearchSupportCache {
       const signal = AbortSignal.timeout(this.timeoutMs);
       const timedOut = new Promise<SearchSupport>((resolve) => signal.addEventListener("abort", () => resolve("unknown"), { once: true }));
       running = Promise.race([probe(signal).catch((): SearchSupport => "unknown"), timedOut])
+        .then((result) => {
+          if (result !== "unknown") this.remember(apiUrl, result === "yes");
+          return result;
+        })
         .finally(() => this.pending.delete(apiUrl));
       this.pending.set(apiUrl, running);
     }
-    const result = await running;
-    if (result !== "unknown") this.remember(apiUrl, result === "yes");
-    return result !== "no";
+    return (await running) !== "no";
   }
 
   /** Record a definite answer, such as a call refused with 501. */
@@ -60,9 +72,10 @@ export const searchSupport = new SearchSupportCache();
 
 /**
  * Whether to list search_messages for this request's caller. The answer is remembered per Web API. When it is out of
- * date, the Web API is asked again only if that needs no token exchange (the caller already holds a Web API token,
- * or `exchange` is set, as over stdio): listing tools over OAuth must not start one. Otherwise the last answer
- * stands, and with none yet the tool is listed. A server without credentials lists no search tool; a caller that
+ * date, the last answer stands for this request while the Web API is asked again in the background, so no request
+ * waits on it; only the first answer is awaited. The Web API is asked only if that needs no token exchange (the
+ * caller already holds a Web API token, or `exchange` is set, as over stdio): listing tools over OAuth must not
+ * start one. With no answer yet and no token, the tool is listed. A server without credentials lists no search tool; a caller that
  * can't be resolved for another reason (the host is unreachable) gets it, like every other tool.
  */
 export async function searchAvailable(
@@ -78,6 +91,10 @@ export async function searchAvailable(
   const apiUrl = caller.client.apiUrl;
   const fresh = cache.cached(apiUrl);
   if (fresh !== undefined) return fresh;
-  if (exchange || caller.client.hasToken()) return cache.supported(apiUrl, (signal) => caller.client.searchSupported(signal));
-  return cache.lastKnown(apiUrl) ?? true;
+  const last = cache.lastKnown(apiUrl);
+  if (!exchange && !caller.client.hasToken()) return last ?? true;
+  const probe = (signal: AbortSignal) => caller.client.searchSupported(signal);
+  if (last === undefined) return cache.supported(apiUrl, probe);
+  cache.refresh(apiUrl, probe);
+  return last;
 }

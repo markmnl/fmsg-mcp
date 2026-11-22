@@ -23,13 +23,16 @@ const threadItem = outputObject({
 
 type ThreadItem = z.infer<typeof threadItem>;
 
-/** A visible message, not a reaction or an edit (which hosts fold into the message they change). */
-function counted(m: FmsgMessage): boolean {
-  return m.edit !== true && (m.reaction === null || m.reaction === undefined);
+/**
+ * A message to count and show: not a reaction, not an edit (which hosts fold into the message they change), and not
+ * in the trash unless searching it. The host returns trashed messages and edits too, so threads can be grouped.
+ */
+function counted(m: FmsgMessage, inTrash: boolean): boolean {
+  return m.edit !== true && (m.reaction === null || m.reaction === undefined) && (inTrash || !m.trash);
 }
 
 /** Summarise each thread from the messages the search returned with it. */
-export function summarizeThreads(result: SearchResult, self: string): ThreadItem[] {
+export function summarizeThreads(result: SearchResult, self: string, inTrash = false): ThreadItem[] {
   const byId = new Map(result.messages.map((m) => [m.id, m]));
   const roots = new Set(result.threads.map((t) => t.root));
   const members = new Map<string, FmsgMessage[]>(result.threads.map((t) => [t.root, []]));
@@ -45,7 +48,7 @@ export function summarizeThreads(result: SearchResult, self: string): ThreadItem
   }
   const me = self.toLowerCase();
   return result.threads.map((t) => {
-    const messages = (members.get(t.root) ?? []).filter(counted);
+    const messages = (members.get(t.root) ?? []).filter((m) => counted(m, inTrash));
     const root = byId.get(t.root);
     const people = new Map<string, string>();
     for (const m of messages) {
@@ -115,7 +118,10 @@ export function registerSearchTool(cache: SearchSupportCache = searchSupport): R
               q: query, sort, files: with_attachments, unread: unread_only, drafts: drafts_only, trash: in_trash, limit, offset,
             }, signal);
           } catch (error) {
-            if (error instanceof FmsgHttpError && [404, 405, 501].includes(error.status)) {
+            // As the probe reads them: 400 "invalid message id" is a Web API older than search taking it for an id.
+            // The client stays listed this session (no list_changed is sent), so the error explains instead.
+            if (error instanceof FmsgHttpError && ([404, 405, 501].includes(error.status) ||
+              error.status === 400 && /invalid message id/iu.test(error.message))) {
               cache.remember(caller.client.apiUrl, false);
               return { content: [{ type: "text", text: "This fmsg host doesn't support search. Use list_messages and list_sent to find a thread by its topic, then get_thread." }], isError: true };
             }
@@ -124,7 +130,7 @@ export function registerSearchTool(cache: SearchSupportCache = searchSupport): R
             }
             throw error;
           }
-          const threads = summarizeThreads(result, caller.address);
+          const threads = summarizeThreads(result, caller.address, in_trash);
           const structured = { total: result.total, next_offset: result.next_offset, terms: result.terms, threads, ...UNTRUSTED };
           const what = query.trim() ? `matching ${JSON.stringify(query.trim())}` : "";
           if (!threads.length) return ok(`No threads ${what || "match those filters"}${offset ? ` at offset ${offset}` : ""}.`, structured);

@@ -43,7 +43,10 @@ export function maxMessageId(ids: Iterable<string>): string | undefined {
   return best;
 }
 
-/** JSON keys whose numeric values are int64 ids on the fmsg wire. */
+/**
+ * JSON keys whose numeric values are int64 ids on the fmsg wire. These apply to every response, so a key added here
+ * (such as search's `root`) must never carry a number that isn't a message id elsewhere: it would be stringified.
+ */
 const ID_KEYS = new Set(["id", "pid", "batch_id", "root_id", "trigger_id", "root"]);
 
 /**

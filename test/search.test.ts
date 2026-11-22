@@ -89,13 +89,31 @@ describe("search_messages", () => {
   });
 
   it("explains a host that refuses search, and remembers it", async () => {
-    fake.search = "not_implemented";
-    const cache = new SearchSupportCache();
-    h = await connectInMemory(fake, "fmsgk_alice_secret", {}, { search: true, searchSupport: cache });
-    const result = await call(h.client, "search_messages", { query: "anything" });
-    expect(result.isError).toBe(true);
-    expect(text(result)).toContain("doesn't support search");
-    expect(cache.cached(fake.baseUrl)).toBe(false);
+    // 501 from a host that defines search; 400 "invalid message id" from one older than search.
+    for (const mode of ["not_implemented", "missing"] as const) {
+      fake.search = mode;
+      const cache = new SearchSupportCache();
+      h = await connectInMemory(fake, "fmsgk_alice_secret", {}, { search: true, searchSupport: cache });
+      const result = await call(h.client, "search_messages", { query: "anything" });
+      expect(result.isError, mode).toBe(true);
+      expect(text(result), mode).toContain("doesn't support search");
+      expect(cache.cached(fake.baseUrl), mode).toBe(false);
+      await h.close();
+    }
+  });
+
+  it("leaves trashed messages and edits out of the counts unless searching the trash", async () => {
+    const root = fake.seed({ from: BOB, to: [ALICE], topic: "Offsite", data: "Venue ideas" });
+    const kept = fake.seed({ from: CAROL, to: [ALICE, BOB], pid: root.id, data: "The lake house" });
+    const binned = fake.seed({ from: BOB, to: [ALICE], pid: kept.id, data: "Or the city" });
+    binned.trash = "message";
+    fake.seed({ from: CAROL, to: [ALICE, BOB], pid: kept.id, data: "", type: "application/vnd.fmsg.edit", edit: true, no_reply: true, terminal: true });
+    h = await connectInMemory(fake, "fmsgk_alice_secret", {}, { search: true });
+
+    const out = structured<Result>(await call(h.client, "search_messages", { query: "venue" }));
+    expect(out.threads[0]).toMatchObject({ root: root.id, message_count: 2, unread: 2, latest: { id: kept.id } });
+    const trash = structured<Result>(await call(h.client, "search_messages", { in_trash: true }));
+    expect(trash.threads[0]).toMatchObject({ root: root.id, message_count: 3, unread: 3, latest: { id: binned.id } });
   });
 
   it("asks for more specific words when a search takes too long", async () => {
@@ -129,7 +147,7 @@ describe("searchAvailable", () => {
     expect(fake.searches.every((p) => p.get("q") === "-")).toBe(true);
   });
 
-  it("asks again once the answer is out of date", async () => {
+  it("asks again once the answer is out of date, without making the request wait", async () => {
     let now = 1_000;
     const cache = new SearchSupportCache(60_000, 2_000, () => now);
     fake.search = "not_implemented";
@@ -137,6 +155,9 @@ describe("searchAvailable", () => {
     fake.search = "implemented";
     expect(await searchAvailable(provider(), undefined, { exchange: true, cache })).toBe(false);
     now += 60_001;
+    // The stale answer stands for this request; the next one gets the fresh answer.
+    expect(await searchAvailable(provider(), undefined, { exchange: true, cache })).toBe(false);
+    await cache.pendingFor(fake.baseUrl);
     expect(await searchAvailable(provider(), undefined, { exchange: true, cache })).toBe(true);
   });
 
@@ -162,9 +183,10 @@ describe("searchAvailable", () => {
     now = 100;
     expect(await searchAvailable(signedIn, undefined, { cache: stale })).toBe(false);
     expect(fake.requests).toHaveLength(0);
-    // Once it holds a token, asking costs no exchange.
+    // Once it holds a token, asking costs no exchange, and happens in the background.
     await client.getToken();
     expect(await searchAvailable(signedIn, undefined, { cache: stale })).toBe(false);
+    await stale.pendingFor(fake.baseUrl);
     expect(fake.requests.map((r) => r.path)).toEqual(["/fmsg/token", "/fmsg/search"]);
   });
 
