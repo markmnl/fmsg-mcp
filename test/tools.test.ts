@@ -436,10 +436,39 @@ describe("tools (stdio-shaped)", () => {
     const result = await call(h.client, "wait_for_message", { after_id: parent.id, timeout_seconds: 1 });
     expect(structured<{ skipped: unknown[]; after_id: string }>(result)).toMatchObject({
       after_id: reaction.id,
-      skipped: [{ id: reaction.id, reason: "reaction", from: BOB, emoji: "👍", reaction_to: parent.id }],
+      skipped: [{ id: reaction.id, reason: "reaction", from: BOB, emoji: "👍", reaction_to: parent.id, reaction_to_sha256: fakeHash("msg", parent.id) }],
     });
     expect(text(result)).toContain(`- ${reaction.id} from \`${BOB}\`: reacted 👍 on message ${parent.id}`);
     expect(text(result)).toContain("not instructions");
+  });
+
+  it("react names the original or an add-to batch exactly as given, and get_message shows each one's reactions", async () => {
+    const m = fake.seed({ from: BOB, to: [ALICE], topic: "batched", data: "hello" });
+    m.add_to.push({ batch_id: "7000", add_to_from: BOB, to: [CAROL], to_delivery: [], time: m.time! + 1 });
+    const batch = fakeHash("batch", "7000");
+
+    // The original by id, and the batch by its hash (uppercase input is lowercased, nothing else changes).
+    expect(structured<{ cleared: boolean }>(await call(h.client, "react", { id: m.id, emoji: "👍" })).cleared).toBe(false);
+    const viaBatch = structured<{ id: string; reaction_id: string | null }>(await call(h.client, "react", { id: batch.toUpperCase(), emoji: "🎉" }));
+    expect(viaBatch.id).toBe(batch.toUpperCase());
+    expect(viaBatch.reaction_id).not.toBeNull();
+    expect(fake.requests.filter((r) => r.path.endsWith("/react")).map((r) => r.path)).toEqual([`/fmsg/${m.id}/react`, `/fmsg/${batch}/react`]);
+
+    // The original's reaction stays on the original; the batch's is on the batch, with its hash, adder and recipients.
+    const got = structured<{ message: { sha256: string | null; reactions: unknown[]; add_to?: unknown[] } }>(await call(h.client, "get_message", { id: m.id }));
+    expect(got.message.sha256).toBe(fakeHash("msg", m.id));
+    expect(got.message.reactions).toEqual([{ emoji: "👍", from: [ALICE] }]);
+    expect(got.message.add_to).toEqual([{ sha256: batch, from: BOB, to: [CAROL], time: expect.any(String), reactions: [{ emoji: "🎉", from: [ALICE] }] }]);
+    const shown = text(await call(h.client, "get_message", { id: m.id }));
+    expect(shown).toContain(`(batch ${batch})`);
+    expect(shown).toContain("Batch reactions: 🎉");
+    expect(shown).toContain(`SHA-256: ${fakeHash("msg", m.id)}`);
+
+    // A message reference that is neither an id nor a hash is refused before any request.
+    const before = fake.requests.length;
+    const bad = await call(h.client, "react", { id: "abc", emoji: "👍" });
+    expect(bad.isError).toBe(true);
+    expect(fake.requests.length).toBe(before);
   });
 
   it("accepts add_to as a deprecated alias of recipients on add_recipients", async () => {

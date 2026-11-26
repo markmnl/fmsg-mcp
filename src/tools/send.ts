@@ -9,7 +9,7 @@ import { withOwner } from "../owner.js";
 import { addressList, addressText, attachmentType, headerValue, isoTime, sortAttachments } from "../render.js";
 import { type FileRoutes, type PreparedAttachment, attachmentInput, base64Hint, fileRoutes, hostFilesResult, prepareAllAttachments, sendWithAttachments } from "./attachments.js";
 import { HOST_FILE_META, hostFilesInput } from "../host-files.js";
-import { SENDS, SENDS_MESSAGE, type Register, type ToolDeps, attachmentItem, idSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
+import { SENDS, SENDS_MESSAGE, type Register, type ToolDeps, attachmentItem, idSchema, messageRefSchema, ok, outputObject, resolverFor, withCaller } from "./common.js";
 import { callerBatch, holdersOf, ownerLeftOffNote, replyParent, replyTarget } from "./parent.js";
 import { WORKING_EMOJI } from "../indicators.js";
 import { threadRoot } from "./read.js";
@@ -294,9 +294,11 @@ export const registerSendTools: Register = (server, deps) => {
       title: "React to fmsg message",
       description:
         "Set or clear your emoji reaction on a message (one reaction per person; a new emoji replaces the previous). " +
-        "Sends a small reaction message to the other participants. Fails on drafts and terminal messages.",
+        "Sends a small reaction message to the other participants of the message you name. An add-to batch is a message " +
+        "of its own with its own reactions: name the original by its id or sha256, or a batch by its sha256 (add_to in " +
+        "get_message). Named by id, a message you were only added to means your batch. Fails on drafts and terminal messages.",
       inputSchema: z.strictObject({
-        id: idSchema,
+        id: messageRefSchema.describe("the message reacted to: its id or sha256, or an add-to batch's sha256; sent as given"),
         emoji: z.string().max(32).nullable().describe("a single emoji; null or empty clears your reaction"),
       }),
       outputSchema: outputObject({ id: z.string(), reaction_id: z.string().nullable(), time: z.string().nullable(), cleared: z.boolean() }),
@@ -309,7 +311,7 @@ export const registerSendTools: Register = (server, deps) => {
       withCaller(deps, ctx, async (caller, signal) => {
         const value = emoji && emoji.trim() ? emoji.trim() : null;
         const result = await caller.client.react(id, value, signal);
-        deps.indicators.handled(caller, [id]);
+        if (/^[0-9]+$/u.test(id)) deps.indicators.handled(caller, [id]);
         const structured = { id, reaction_id: result.id, time: isoTime(result.time), cleared: value === null };
         return ok(value ? `Reacted ${value} to message ${id}` : `Cleared your reaction on message ${id}`, structured);
       }),

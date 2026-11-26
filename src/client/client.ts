@@ -412,8 +412,10 @@ export class FmsgClient {
     };
   }
 
+  /** `id` is a message id, or the sha256 of a message or of an add-to batch, sent as given (hex lowercased). */
   async react(id: string, emoji: string | null, signal?: AbortSignal): Promise<ReactResult> {
-    const mid = normalizeMessageId(id);
+    const ref = id.trim();
+    const mid = /^[0-9a-fA-F]{64}$/u.test(ref) ? ref.toLowerCase() : normalizeMessageId(ref);
     const result = await this.json<{ id?: unknown; time?: number | null }>(`/fmsg/${encodeURIComponent(mid)}/react`, {
       method: "POST",
       headers: { "content-type": "application/json" },

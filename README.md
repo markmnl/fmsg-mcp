@@ -146,7 +146,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `list_messages` | Inbox, newest first, with previews, attachment types and `size` (`compressed` marks a body sent deflated); reactions hidden and never counted as unread unless `include_reactions` |
 | `list_sent` | Sent messages with per-recipient delivery state |
 | `search_messages` | Find threads by the words in their topic, addresses, attachment names or text body, with `unread_only`, `with_attachments`, `drafts_only` and `in_trash` filters; each result summarises the thread and shows where the words matched. Listed only when the fmsg Web API implements the optional `GET /fmsg/search`, which this server checks per Web API and rechecks every 10 minutes |
-| `get_message` | One message with headers, full text body, attachments, reactions and, for a reply, the root's `thread_topic` |
+| `get_message` | One message with headers, full text body, attachments, reactions, its `sha256`, each add-to batch (`add_to`: its `sha256`, adder, recipients and own reactions) and, for a reply, the root's `thread_topic` |
 | `get_thread` | The lineage from the thread root to a message (`scope: "lineage"`; other replies in the thread are not included), with gaps for messages you cannot see, per-message flags and added recipients, the root's `thread_topic`, and a `next` step that never suggests replying to a terminal or no-reply message |
 | `send_message` | Start a new thread; sends immediately (fmsg messages are immutable) |
 | `reply` | Reply into a thread; reply-all by default, refuses terminal and no-reply parents |
@@ -154,7 +154,7 @@ See the [TLS reverse-proxy example](docs/http-deployment.md) for a loopback depl
 | `send_draft` | Send a draft, with its attachments |
 | `delete_draft` | Discard an unsent draft |
 | `add_recipients` | Add `recipients` to a sent message (`add_to` is a deprecated alias) |
-| `react` | Set or clear your emoji reaction |
+| `react` | Set or clear your emoji reaction on the message you name: its id or `sha256`, or an add-to batch's `sha256` (a batch has its own reactions) |
 | `edit_message` | Change the body of a message you sent, or revert it to the original (FMSG-008 edit; needs a host with FMSG-003 v0.5.0). Edited messages read as edited and carry `edited`; edit messages themselves are never listed |
 | `indicate` | Show the other participants a short-lived status on a message, such as ⏳ while working on a reply or ✍️ while composing (FMSG-006 indicator; `ttl` 1–120 s, default 60), kept up until you reply, react or mark it read (up to 5 minutes); an empty `emoji` clears it. Reading a message never shows one |
 | `mark_read` | Mark received messages read |
