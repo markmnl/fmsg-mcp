@@ -7,7 +7,8 @@
   result summarises the thread (topic, message and unread counts, participants, newest message) and
   shows where the words matched; `get_thread` reads it. It uses `GET /fmsg/search`, an optional
   fmsg Web API endpoint, and is listed only when the Web API implements it: a query with no words is
-  asked once per Web API and the answer kept for 10 minutes. Listing tools never starts a token
+  asked once per Web API and the answer kept for 10 minutes; a Web API that can't answer is asked
+  again after a minute, not by every request. Listing tools never starts a token
   exchange to find out; until it is known the tool is listed, and a refusal (501/404) explains itself.
   The server instructions point to it when it is listed. `FmsgClient` adds `search()` and
   `searchSupported()`.

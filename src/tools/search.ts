@@ -1,5 +1,5 @@
 import * as z from "zod/v4";
-import { FmsgHttpError } from "../client/client.js";
+import { FmsgHttpError, searchNotImplemented } from "../client/client.js";
 import type { FmsgMessage, SearchResult } from "../client/types.js";
 import { addressText, headerValue, isoTime, messageData } from "../render.js";
 import { type SearchSupportCache, searchSupport } from "../search-support.js";
@@ -118,10 +118,9 @@ export function registerSearchTool(cache: SearchSupportCache = searchSupport): R
               q: query, sort, files: with_attachments, unread: unread_only, drafts: drafts_only, trash: in_trash, limit, offset,
             }, signal);
           } catch (error) {
-            // As the probe reads them: 400 "invalid message id" is a Web API older than search taking it for an id.
-            // The client stays listed this session (no list_changed is sent), so the error explains instead.
-            if (error instanceof FmsgHttpError && ([404, 405, 501].includes(error.status) ||
-              error.status === 400 && /invalid message id/iu.test(error.message))) {
+            // The same reading as the probe. The tool stays listed this session (no list_changed is sent), so the
+            // error explains instead.
+            if (searchNotImplemented(error)) {
               cache.remember(caller.client.apiUrl, false);
               return { content: [{ type: "text", text: "This fmsg host doesn't support search. Use list_messages and list_sent to find a thread by its topic, then get_thread." }], isError: true };
             }

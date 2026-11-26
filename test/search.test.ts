@@ -1,7 +1,9 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { FmsgClient } from "../src/client/client.js";
+import { FmsgClient, searchNotImplemented } from "../src/client/client.js";
+import { FmsgHttpError } from "../src/client/errors.js";
+import type { SearchSupport } from "../src/client/types.js";
 import { type CallerProvider, StaticCallerProvider, UnconfiguredCallerProvider } from "../src/context.js";
 import { createHttpServer, type HttpServerHandle } from "../src/http.js";
 import { SearchSupportCache, searchAvailable } from "../src/search-support.js";
@@ -166,6 +168,64 @@ describe("searchAvailable", () => {
     const unreachable = new StaticCallerProvider(new FmsgClient("http://127.0.0.1:9", "fmsgk_alice_secret", { allowInsecureHttp: true }));
     expect(await searchAvailable(unreachable, undefined, { exchange: true, cache })).toBe(true);
     expect(cache.lastKnown("http://127.0.0.1:9")).toBeUndefined();
+  });
+
+  it("waits before asking again after a probe that couldn't tell", async () => {
+    let now = 1_000;
+    const cache = new SearchSupportCache(600_000, 2_000, () => now, 60_000);
+    const url = "https://api.example.com";
+    let probes = 0;
+    const probe = async (): Promise<SearchSupport> => { probes++; return "unknown"; };
+    for (let i = 0; i < 5; i++) expect(await cache.supported(url, probe)).toBe(true);
+    expect(probes).toBe(1);
+    now += 60_001;
+    expect(await cache.supported(url, probe)).toBe(true);
+    expect(probes).toBe(2);
+    // A definite answer ends the wait.
+    cache.remember(url, false);
+    expect(await cache.supported(url, probe)).toBe(false);
+    expect(probes).toBe(2);
+  });
+
+  it("keeps the last answer, and asks once, while the Web API can't answer", async () => {
+    let now = 0;
+    const cache = new SearchSupportCache(10, 2_000, () => now, 60_000);
+    fake.search = "not_implemented";
+    expect(await searchAvailable(provider(), undefined, { exchange: true, cache })).toBe(false);
+    now = 100; // the answer is out of date
+    let probes = 0;
+    const client = { apiUrl: fake.baseUrl, hasToken: () => true, searchSupported: async (): Promise<SearchSupport> => { probes++; return "unknown"; } };
+    const failing = { forRequest: async () => ({ client, address: ALICE, tokenExpiresAt: async () => 0 }) } as unknown as CallerProvider;
+    for (let i = 0; i < 5; i++) {
+      expect(await searchAvailable(failing, undefined, { cache })).toBe(false);
+      await cache.pendingFor(fake.baseUrl);
+    }
+    expect(probes).toBe(1);
+  });
+
+  it("makes only the first request wait when the probe never answers", async () => {
+    const cache = new SearchSupportCache(600_000, 50);
+    let probes = 0;
+    const client = { apiUrl: "https://api.example.com", hasToken: () => true, searchSupported: () => { probes++; return new Promise<SearchSupport>(() => {}); } };
+    const hanging = { forRequest: async () => ({ client, address: ALICE, tokenExpiresAt: async () => 0 }) } as unknown as CallerProvider;
+    let started = Date.now();
+    expect(await searchAvailable(hanging, undefined, { cache })).toBe(true);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(40);
+    started = Date.now();
+    for (let i = 0; i < 5; i++) expect(await searchAvailable(hanging, undefined, { cache })).toBe(true);
+    expect(Date.now() - started).toBeLessThan(40);
+    expect(probes).toBe(1);
+  });
+
+  it("takes only a refusal that says so for a missing search", () => {
+    const refused = (status: number, message: string) => new FmsgHttpError(message, status, "GET", "/fmsg/search");
+    expect(searchNotImplemented(refused(501, "search is not implemented by this host"))).toBe(true);
+    expect(searchNotImplemented(refused(404, "not found"))).toBe(true);
+    expect(searchNotImplemented(refused(400, "invalid message id"))).toBe(true);
+    // A search that exists and refuses its parameters is not a missing search.
+    expect(searchNotImplemented(refused(400, "limit must be a positive integer"))).toBe(false);
+    expect(searchNotImplemented(refused(503, "search took too long"))).toBe(false);
+    expect(searchNotImplemented(new Error("fetch failed"))).toBe(false);
   });
 
   it("never starts a token exchange just to list tools", async () => {

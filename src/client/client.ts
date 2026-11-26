@@ -84,6 +84,16 @@ function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
  * Client for the fmsg Web API (FMSG-003). Accepts an API key or a caller-bound
  * token provider, renews tokens ahead of expiry, and retries once on 401.
  */
+/**
+ * Whether error is a Web API saying it has no `GET /fmsg/search`: 501 (not implemented), 404/405 (no such route),
+ * or the 400 "invalid message id" of a Web API older than search, which takes the path for a message id. Any other
+ * 400 is a search that refused its parameters, not a missing one.
+ */
+export function searchNotImplemented(error: unknown): boolean {
+  return error instanceof FmsgHttpError && ([404, 405, 501].includes(error.status) ||
+    (error.status === 400 && /invalid message id/iu.test(error.message)));
+}
+
 export class FmsgClient {
   readonly apiUrl: string;
   private token?: AccessToken;
@@ -279,9 +289,8 @@ export class FmsgClient {
 
   /**
    * Whether the Web API implements `GET /fmsg/search`. A query with no words (only punctuation) answers 200 with no
-   * threads where search is implemented, without searching anything. 501 (not implemented) and 404/405 (no such
-   * route) mean no; an older Web API takes the path as a message id and answers 400. Anything else (network errors,
-   * authentication, 5xx) can't tell.
+   * threads where search is implemented, without searching anything. A refusal that says so (see
+   * searchNotImplemented) means no. Anything else (network errors, authentication, another 400, 5xx) can't tell.
    */
   async searchSupported(signal?: AbortSignal): Promise<SearchSupport> {
     try {
@@ -289,8 +298,7 @@ export class FmsgClient {
       await response.body?.cancel();
       return "yes";
     } catch (error) {
-      if (error instanceof FmsgHttpError && [400, 404, 405, 501].includes(error.status)) return "no";
-      return "unknown";
+      return searchNotImplemented(error) ? "no" : "unknown";
     }
   }
 

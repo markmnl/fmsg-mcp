@@ -5,17 +5,21 @@ import { type Caller, type CallerProvider, UnconfiguredCallerProvider } from "./
 /**
  * Whether each Web API implements the optional `GET /fmsg/search`, remembered per API URL so that `search_messages`
  * is listed only where it works. A definite answer is kept for `ttlMs`, so a Web API that starts implementing search
- * gains the tool without a restart. "unknown" (the host was unreachable or the probe timed out) is never kept and
- * counts as supported: better a tool that explains a refusal than one hidden by a passing failure.
+ * gains the tool without a restart. "unknown" (the host was unreachable or the probe timed out) is never kept as an
+ * answer and counts as supported: better a tool that explains a refusal than one hidden by a passing failure. It
+ * does hold the next probe off for `retryMs`, so a Web API that can't answer isn't asked again by every request.
  */
 export class SearchSupportCache {
   private readonly known = new Map<string, { supported: boolean; until: number }>();
   private readonly pending = new Map<string, Promise<SearchSupport>>();
+  /** When each Web API may be asked again after a probe that could not tell. */
+  private readonly retryAt = new Map<string, number>();
 
   constructor(
     private readonly ttlMs = 10 * 60_000,
     private readonly timeoutMs = 2_000,
     private readonly now: () => number = Date.now,
+    private readonly retryMs = 60_000,
   ) {}
 
   /** The remembered answer for apiUrl, if still fresh. */
@@ -41,18 +45,21 @@ export class SearchSupportCache {
 
   /**
    * Whether apiUrl implements search: the remembered answer, else the result of probe (shared by concurrent callers
-   * and bounded by the timeout). Never rejects.
+   * and bounded by the timeout). After a probe that could not tell, the last answer (or "supported" when there is
+   * none) stands for `retryMs` without asking again. Never rejects.
    */
   async supported(apiUrl: string, probe: (signal: AbortSignal) => Promise<SearchSupport>): Promise<boolean> {
     const cached = this.cached(apiUrl);
     if (cached !== undefined) return cached;
+    if ((this.retryAt.get(apiUrl) ?? 0) > this.now()) return this.lastKnown(apiUrl) ?? true;
     let running = this.pending.get(apiUrl);
     if (!running) {
       const signal = AbortSignal.timeout(this.timeoutMs);
       const timedOut = new Promise<SearchSupport>((resolve) => signal.addEventListener("abort", () => resolve("unknown"), { once: true }));
       running = Promise.race([probe(signal).catch((): SearchSupport => "unknown"), timedOut])
         .then((result) => {
-          if (result !== "unknown") this.remember(apiUrl, result === "yes");
+          if (result === "unknown") this.retryAt.set(apiUrl, this.now() + this.retryMs);
+          else this.remember(apiUrl, result === "yes");
           return result;
         })
         .finally(() => this.pending.delete(apiUrl));
@@ -64,6 +71,7 @@ export class SearchSupportCache {
   /** Record a definite answer, such as a call refused with 501. */
   remember(apiUrl: string, supported: boolean): void {
     this.known.set(apiUrl, { supported, until: this.now() + this.ttlMs });
+    this.retryAt.delete(apiUrl);
   }
 }
 
