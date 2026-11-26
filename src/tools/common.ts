@@ -40,11 +40,37 @@ export const SENDS_MESSAGE: ToolAnnotations = { ...SENDS, destructiveHint: false
 export const idSchema = z.string().regex(/^[0-9]+$/u, "fmsg message ids are decimal integers").describe("fmsg message id");
 
 /**
+ * A message named by its decimal id or its 64-hex sha256, which may also be an add-to batch's sha256. Passed to the
+ * Web API as given (hex lowercased); the host decides what it names.
+ */
+export const messageRefSchema = z
+  .string()
+  .trim()
+  .regex(/^(?:[0-9]+|[0-9a-fA-F]{64})$/u, "a decimal fmsg message id, or a 64-character hexadecimal sha256")
+  .describe("fmsg message id, or the sha256 of a message or of an add-to batch");
+
+
+/**
  * Output schemas must stay valid for hosts that cached an earlier copy and validate every later result against it.
  * So every output object accepts unknown properties, and fields added after 0.2.5 are optional: a release may add
  * fields and values but never remove or rename them.
  */
 export const outputObject = z.looseObject;
+
+const reactionGroup = outputObject({ emoji: z.string(), from: z.array(z.string()) });
+
+/**
+ * An add-to batch: a message of its own (the original's contents with a wider audience), with its own reactions.
+ * Added after 0.2.5, so every field is optional (see outputObject).
+ */
+export const addToBatchItem = outputObject({
+  sha256: z.string().nullable().optional().describe("the batch's hash: react to or reply through the batch with it; null until sent"),
+  from: z.string().nullable().optional().describe("who added the recipients"),
+  to: z.array(z.string()).optional().describe("the recipients this batch added"),
+  time: z.string().nullable().optional(),
+  reactions: z.array(outputObject({ emoji: z.string().optional(), from: z.array(z.string()).optional() })).optional()
+    .describe("reactions on this batch, not on the original"),
+});
 
 /**
  * A string output whose current values are listed only in its description. Publishing an enum would make every
@@ -106,6 +132,10 @@ export const messageItem = outputObject({
   from: z.string(),
   to: z.array(z.string()),
   added: z.array(z.string()).describe("recipients added later via add-to"),
+  sha256: z.string().nullable().optional().describe("the message's protocol hash; null for drafts and on hosts that predate hashes"),
+  add_to: z.array(addToBatchItem).optional().describe(
+    "each add-to batch, in order: a message of its own with its own sha256 and reactions (absent when there are none)",
+  ),
   topic: z.string(),
   time: z.string().nullable().describe("ISO-8601; null for drafts"),
   time_posix: z.number().nullable(),
@@ -118,7 +148,7 @@ export const messageItem = outputObject({
   compressed: z.boolean().optional().describe("true when the body was sent deflate-compressed on the wire (see size)"),
   preview: z.string().describe("start of the body; may be shorter than the full body"),
   attachments: z.array(attachmentItem).describe("sorted by filename, the same order in every tool"),
-  reactions: z.array(outputObject({ emoji: z.string(), from: z.array(z.string()) })),
+  reactions: z.array(reactionGroup).describe("reactions on this message itself; an add-to batch's are on that batch in add_to"),
   reaction: z.string().nullable().optional().describe("the emoji when this message is itself a reaction (\"\" clears one); null otherwise"),
   edited: z.string().nullable().optional().describe("ISO-8601 time its sender last edited the body, which is shown as edited; null when unedited"),
 });
@@ -132,6 +162,8 @@ export function toItem(m: FmsgMessage, self: string): MessageItem {
     from: m.from,
     to: m.to,
     added: (m.add_to ?? []).flatMap((b) => b.to ?? []),
+    sha256: m.sha256 ?? null,
+    ...(m.add_to?.length ? { add_to: m.add_to.map(batchItem) } : {}),
     topic: m.topic ?? "",
     time: isoTime(m.time),
     time_posix: typeof m.time === "number" ? m.time : null,
@@ -147,6 +179,16 @@ export function toItem(m: FmsgMessage, self: string): MessageItem {
     reactions: (m.reactions ?? []).map((r) => ({ emoji: r.emoji, from: r.from })),
     reaction: m.reaction ?? null,
     edited: m.edited ? isoTime(m.edited.time) : null,
+  };
+}
+
+export function batchItem(b: NonNullable<FmsgMessage["add_to"]>[number]): z.infer<typeof addToBatchItem> {
+  return {
+    sha256: typeof b.sha256 === "string" ? b.sha256.toLowerCase() : null,
+    from: b.add_to_from ?? null,
+    to: b.to ?? [],
+    time: isoTime(b.time ?? null),
+    reactions: (b.reactions ?? []).map((r) => ({ emoji: r.emoji, from: r.from })),
   };
 }
 

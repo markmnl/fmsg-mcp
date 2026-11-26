@@ -36,6 +36,8 @@ export type Skipped = {
   /** For reactions: the emoji ("" clears) and the message reacted to. */
   emoji?: string;
   reaction_to?: string | null;
+  /** For reactions: the exact hash reacted to (the message's, or an add-to batch's). */
+  reaction_to_sha256?: string | null;
 };
 export type Unclassified = { id: string; from: string; error: string };
 
@@ -249,7 +251,7 @@ export async function waitForMessage(
       for (let i = unclassified.length - 1; i >= 0; i--) if (unclassified[i]?.id === m.id) unclassified.splice(i, 1);
       if (compareMessageIds(m.id, floor) <= 0) return;
       const skip = (reason: SkipReason) => {
-        const reaction = typeof m.reaction === "string" ? { emoji: m.reaction, reaction_to: m.pid ?? null } : {};
+        const reaction = typeof m.reaction === "string" ? { emoji: m.reaction, reaction_to: m.pid ?? null, reaction_to_sha256: m.psha256 ?? null } : {};
         skipped.push({ id: m.id, reason, from: m.from, ...reaction });
         if (compareMessageIds(m.id, skippedMax) > 0) skippedMax = m.id;
       };

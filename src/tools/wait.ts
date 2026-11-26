@@ -75,6 +75,9 @@ export const registerWaitTools: Register = (server, deps) => {
           from: z.string().optional(),
           emoji: z.string().optional().describe("for reactions: the emoji (\"\" clears a reaction)"),
           reaction_to: z.string().nullable().optional().describe("for reactions: the message reacted to"),
+          reaction_to_sha256: z.string().nullable().optional().describe(
+            "for reactions: the exact hash reacted to, the message's or one of its add-to batches' (see add_to in get_message)",
+          ),
         })).describe("messages deliberately passed over; after_id has advanced past them"),
         unclassified: z.array(outputObject({ id: z.string(), from: z.string(), error: z.string() })).describe(
           "messages whose thread could not be determined; after_id is held before them, call again to retry",

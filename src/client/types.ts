@@ -19,6 +19,8 @@ export type AddToBatch = {
   to?: string[];
   to_delivery?: RecipientDelivery[];
   time?: number | null;
+  /** Reactions on the batch itself: a batch is a message of its own, reacted to by its sha256. Absent when none. */
+  reactions?: ReactionGroup[];
 };
 
 export type Attachment = {

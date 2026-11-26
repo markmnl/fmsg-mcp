@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `react` takes the message you choose and sends it as given: a message id, a message's sha256, or an add-to
+  batch's sha256 (a batch is a message of its own, with its own reactions). `get_message` shows each message's
+  `sha256` and, in `add_to`, every batch with its `sha256`, adder, the recipients it added and its own `reactions`;
+  the message's `reactions` are its own. `wait_for_message` gives skipped reactions' `reaction_to_sha256`, the
+  exact hash reacted to.
 - `search_messages` finds threads by the words in their messages (topic, addresses, attachment names,
   text body), with filters for unread, attachments, drafts and the trash, newest first and paged. Each
   result summarises the thread (topic, message and unread counts, participants, newest message) and

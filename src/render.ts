@@ -163,8 +163,13 @@ export function messageHeader(message: FmsgMessage, threadTopic?: string | null,
     `To: ${addressList(message.to) || "(none)"}`,
   ];
   for (const batch of message.add_to ?? []) {
-    lines.push(`Added by ${batch.add_to_from ? addressText(batch.add_to_from) : "?"}: ${addressList(batch.to ?? [])}`);
+    const hash = typeof batch.sha256 === "string" ? ` (batch ${batch.sha256.toLowerCase()})` : "";
+    lines.push(`Added by ${batch.add_to_from ? addressText(batch.add_to_from) : "?"}: ${addressList(batch.to ?? [])}${hash}`);
+    if (batch.reactions?.length) {
+      lines.push(`  Batch reactions: ${batch.reactions.map((r) => `${headerValue(r.emoji)} ${addressList(r.from)}`).join("; ")}`);
+    }
   }
+  if (typeof message.sha256 === "string") lines.push(`SHA-256: ${message.sha256.toLowerCase()}`);
   lines.push(`Time: ${isoTime(message.time) ?? "draft"}`);
   if (message.topic) lines.push(`Topic: ${headerValue(message.topic)}`);
   if (message.pid) lines.push(`Reply to: ${message.pid}`);

@@ -204,6 +204,7 @@ export class FakeFmsgServer {
       terminal: input.terminal ?? false,
       attachments: (input.attachments ?? []).map((a) => ({ filename: a.filename, size: a.data.byteLength, data: a.data, type: a.type ?? "application/octet-stream" })),
       reaction: input.reaction ?? null,
+      ...(input.psha256 ? { psha256: input.psha256 } : {}),
       ...(input.edit ? { edit: true } : {}),
       deflate: input.deflate ?? false,
       ...(input.wireSize !== undefined ? { wireSize: input.wireSize } : {}),
@@ -302,10 +303,17 @@ export class FakeFmsgServer {
     return cut;
   }
 
-  private reactionsOf(m: StoredMessage): Array<{ emoji: string; from: string[] }> {
+  private batchHash(b: StoredMessage["add_to"][number]): string {
+    return b.sha256 === undefined || b.sha256 === null ? fakeHash("batch", b.batch_id) : b.sha256;
+  }
+
+  /** Reactions on m itself, or, given a batch's hash, on that add-to batch (a message of its own). */
+  private reactionsOf(m: StoredMessage, batchHash?: string): Array<{ emoji: string; from: string[] }> {
+    const own = fakeHash("msg", m.id);
     const latest = new Map<string, { emoji: string; time: number }>();
     for (const r of this.messages.values()) {
       if (r.deleted || r.reaction === null || r.pid !== m.id || r.time === null) continue;
+      if ((r.psha256 ?? own) !== (batchHash ?? own)) continue;
       const prev = latest.get(r.from);
       if (!prev || r.time > prev.time) latest.set(r.from, { emoji: r.reaction, time: r.time });
     }
@@ -335,7 +343,10 @@ export class FakeFmsgServer {
       from: m.from,
       to: m.to,
       to_delivery: m.to_delivery,
-      add_to: m.add_to.map((b) => ({ sha256: b.sha256 === undefined ? fakeHash("batch", b.batch_id) : b.sha256, ...b })),
+      add_to: m.add_to.map((b) => {
+        const batchReactions = b.sha256 === null ? [] : this.reactionsOf(m, this.batchHash(b));
+        return { sha256: b.sha256 === undefined ? fakeHash("batch", b.batch_id) : b.sha256, ...b, ...(batchReactions.length ? { reactions: batchReactions } : {}) };
+      }),
       time: m.time,
       topic: m.topic,
       type: m.type,
@@ -497,7 +508,16 @@ export class FakeFmsgServer {
 
     const parts = path.split("/").filter(Boolean);
     if (parts[0] !== "fmsg" || !parts[1]) return this.json(res, 404, { error: "not found" });
-    const id = parts[1];
+    let id = parts[1];
+    // A 64-hex reference names a message by its hash, or an add-to batch (a message of its own) by the batch's.
+    let batchRef: StoredMessage["add_to"][number] | undefined;
+    if (/^[0-9a-f]{64}$/u.test(id)) {
+      for (const cand of this.messages.values()) {
+        if (cand.time !== null && fakeHash("msg", cand.id) === id) { id = cand.id; break; }
+        const b = cand.add_to.find((x) => x.sha256 !== null && this.batchHash(x) === id);
+        if (b) { id = cand.id; batchRef = b; break; }
+      }
+    }
     const m = this.messages.get(id);
     const visible = m && !m.deleted && this.participants(m).has(subject);
     if (!m || m.deleted || (!visible && !(m.from === subject))) {
@@ -551,11 +571,15 @@ export class FakeFmsgServer {
       if (m.time === null || m.terminal) return this.json(res, 409, { error: "cannot react to a draft or terminal message" });
       const emoji = typeof input.emoji === "string" ? input.emoji : "";
       if (Buffer.byteLength(emoji) > 64) return this.json(res, 400, { error: "not a single emoji" });
-      const others = [...this.participants(m)].filter((a) => a !== subject);
+      // The original's participants are its sender and to; a batch's also its adder and the recipients it added.
+      const holders = new Set([m.from, ...m.to, ...(batchRef ? [batchRef.add_to_from, ...batchRef.to] : [])]);
+      if (!holders.has(subject)) return this.json(res, 403, { error: "not a participant" });
+      const others = [...holders].filter((a) => a !== subject);
       if (others.length === 0) return this.json(res, 409, { error: "no other participants" });
-      const current = this.reactionsOf(m).find((g) => g.from.includes(subject))?.emoji ?? "";
+      const target = batchRef ? this.batchHash(batchRef) : undefined;
+      const current = this.reactionsOf(m, target).find((g) => g.from.includes(subject))?.emoji ?? "";
       if (current === emoji) return this.json(res, 200, { id: null, time: null });
-      const r = this.seed({ from: subject, to: others, pid: m.id, type: "text/plain;charset=UTF-8", data: emoji, reaction: emoji, no_reply: true, terminal: true });
+      const r = this.seed({ from: subject, to: others, pid: m.id, ...(target ? { psha256: target } : {}), type: "text/plain;charset=UTF-8", data: emoji, reaction: emoji, no_reply: true, terminal: true });
       for (const addr of this.participants(m)) for (const ws of this.sockets.get(addr) ?? []) ws.send(this.encode({ type: "reaction", data: this.listItem(m, addr) }));
       return this.json(res, 201, { id: r.id, time: r.time });
     }
