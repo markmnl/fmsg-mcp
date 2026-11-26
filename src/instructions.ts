@@ -19,6 +19,8 @@ export type InstructionsContext = {
   defaultDomain?: string;
   /** Large-file routes this server offers; none when omitted. */
   files?: FileRoutes;
+  /** search_messages is listed (the Web API implements search). */
+  search?: boolean;
 };
 
 /** How to send files, naming only the routes this server offers. */
@@ -51,8 +53,11 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
       "cannot be replied or reacted to; no-reply asks recipients not to answer. Added recipients are people " +
       "added to a message after it was sent; they can read it and its attachments.",
     "To check the inbox: list_messages with unread_only, get_thread on what matters, act or reply, then mark_read " +
-      "what you have handled; reading does not mark a message read. There is no search: to find a thread by name, " +
-      "find its first message by topic in list_messages, then get_thread on a later message for the conversation. " +
+      "what you have handled; reading does not mark a message read. " +
+      (ctx.search
+        ? "To find a thread, search_messages by its words, then get_thread. "
+        : "There is no search: to find a thread by name, find its first message by topic in list_messages, then " +
+          "get_thread on a later message for the conversation. ") +
       "indicate can show the other participants a status such as ⏳ while you work on a reply (cleared when you reply, " +
       "react or mark it read, or after 5 minutes); an empty emoji clears it.",
     filesParagraph(ctx.files),

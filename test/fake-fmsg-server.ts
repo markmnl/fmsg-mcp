@@ -11,6 +11,8 @@ import type { AccessToken } from "../src/client/types.js";
 
 export type StoredMessage = {
   id: string;
+  /** In the subject's trash (only search reports it). */
+  trash?: "message" | "thread" | null;
   version: number;
   pid: string | null;
   from: string;
@@ -48,7 +50,7 @@ export type SeedInput = Partial<Omit<StoredMessage, "data" | "readBy" | "attachm
 
 export type LoggedRequest = { method: string; path: string; body?: unknown; rawBody?: string; authorization?: string; actAs?: string };
 
-const ID_FIELDS = /"(id|pid|batch_id|root_id|trigger_id)":"([0-9]+)"/gu;
+const ID_FIELDS = /"(id|pid|batch_id|root_id|trigger_id|root)":"([0-9]+)"/gu;
 
 function jwt(sub: string, expSeconds: number, keyId: string, owner?: string): string {
   const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
@@ -112,6 +114,15 @@ export class FakeFmsgServer {
   indicatorsSupported = true;
   /** Make thread/messages answer 422 thread_too_deep. */
   threadTooDeep = false;
+  /**
+   * GET /fmsg/search, an optional endpoint: "missing" takes the path as a message id, as a Web API without the route
+   * does; "not_implemented" answers 501; "implemented" searches the stored messages.
+   */
+  search: "missing" | "not_implemented" | "implemented" = "missing";
+  /** Make the next implemented search answer 503 (took too long). */
+  searchTooSlow = false;
+  /** The query parameters of each search request, probes included. */
+  readonly searches: URLSearchParams[] = [];
   shortTextBytes = 768;
   tokenTtlSeconds = 3600;
   private nextId = 100;
@@ -211,6 +222,65 @@ export class FakeFmsgServer {
         ws.send(this.encode({ type: "new_msg", data: this.listItem(message, addr) }));
       }
     }
+  }
+
+  /** A simple GET /fmsg/search: every word must start a word of one message's topic, addresses, files or text. */
+  private searchResult(params: URLSearchParams, subject: string): Record<string, unknown> {
+    const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+    const q = params.get("q") ?? "";
+    const terms = [...new Set(words(q))];
+    const empty = { total: 0, next_offset: null, terms, threads: [], messages: [] };
+    if (q.trim() && !terms.length) return empty;
+    const visible = [...this.messages.values()].filter((m) =>
+      !m.deleted && (m.time === null ? m.from === subject : this.participants(m).has(subject)));
+    const byId = new Map(visible.map((m) => [m.id, m]));
+    const rootOf = (m: StoredMessage): string => {
+      let at = m;
+      while (at.pid && byId.has(at.pid)) at = byId.get(at.pid)!;
+      return at.id;
+    };
+    const fields = (m: StoredMessage): Array<[string, string]> => [
+      ["body", isText(m.type) ? (m.edited ? m.edited.data : m.data).toString("utf8") : ""], ["topic", m.topic],
+      ...m.attachments.map((a): [string, string] => ["file", a.filename]), ["from", m.from],
+      ...[...m.to, ...m.add_to.flatMap((b) => b.to)].map((a): [string, string] => ["to", a]),
+    ];
+    const hits = (m: StoredMessage) => terms.every((t) => fields(m).some(([, text]) => words(text).some((w) => w.startsWith(t))));
+    const threads = new Map<string, StoredMessage[]>();
+    for (const m of visible) {
+      if (!threads.has(rootOf(m))) threads.set(rootOf(m), []);
+      threads.get(rootOf(m))!.push(m);
+    }
+    const inTrash = params.get("trash") === "only";
+    // As the contract says: a thread's messages include edits and trashed ones; reactions are left out.
+    const member = (m: StoredMessage) => m.reaction === null;
+    const counted = (m: StoredMessage) => member(m) && !m.edit && (inTrash || !m.trash);
+    const unread = (m: StoredMessage) => m.time !== null && m.from !== subject && !m.readBy.has(subject);
+    const found = [...threads.entries()].map(([root, members]) => {
+      const shown = members.filter(counted);
+      const match = terms.length ? shown.filter(hits).sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? 1 : -1))[0] : undefined;
+      const times = shown.map((m) => m.time).filter((t): t is number => t !== null);
+      return { root, members: members.filter(member), shown, match, time: times.length ? Math.max(...times) : null };
+    }).filter((t) => t.shown.length && (!terms.length || t.match)
+      && (!inTrash || t.shown.some((m) => m.trash))
+      && (params.get("files") !== "true" || t.shown.some((m) => m.attachments.length))
+      && (params.get("unread") !== "true" || t.shown.some(unread))
+      && (params.get("scope") !== "drafts" || t.shown.some((m) => m.time === null)));
+    const dir = params.get("sort") === "oldest" ? 1 : -1;
+    found.sort((a, b) => dir * ((a.time ?? 0) - (b.time ?? 0)));
+    const limit = Math.min(50, Number(params.get("limit") ?? 25));
+    const offset = Number(params.get("offset") ?? 0);
+    const page = found.slice(offset, offset + limit);
+    return {
+      total: found.length,
+      next_offset: offset + page.length < found.length ? offset + page.length : null,
+      terms,
+      threads: page.map((t) => {
+        if (!t.match) return { root: t.root, time: t.time, match: null };
+        const [field, text] = fields(t.match).find(([, x]) => terms.some((term) => words(x).some((w) => w.startsWith(term))))!;
+        return { root: t.root, time: t.time, match: { id: t.match.id, field, text: text.slice(0, 200) } };
+      }),
+      messages: page.flatMap((t) => t.members).map((m) => ({ ...this.listItem(m, subject), trash: m.trash ?? null })),
+    };
   }
 
   private participants(m: StoredMessage): Set<string> {
@@ -349,6 +419,15 @@ export class FakeFmsgServer {
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const byIdDesc = (a: StoredMessage, b: StoredMessage) => (BigInt(a.id) < BigInt(b.id) ? 1 : -1);
 
+    if (method === "GET" && path === "/fmsg/search" && this.search !== "missing") {
+      this.searches.push(url.searchParams);
+      if (this.search === "not_implemented") return this.json(res, 501, { error: "search is not implemented by this host" });
+      if (this.searchTooSlow) {
+        this.searchTooSlow = false;
+        return this.json(res, 503, { error: "search took too long; try more specific words" });
+      }
+      return this.json(res, 200, this.searchResult(url.searchParams, subject));
+    }
     if (method === "GET" && path === "/fmsg") {
       const items = [...this.messages.values()]
         .filter((m) => !m.deleted && m.time !== null && m.from !== subject && (m.to.includes(subject) || m.add_to.some((b) => b.to.includes(subject))))

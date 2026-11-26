@@ -8,6 +8,7 @@ import { loadConfig, DEFAULT_HTTP_PORT, type ConfigOverrides } from "./config.js
 import { type CallerProvider, StaticCallerProvider, UnconfiguredCallerProvider } from "./context.js";
 import { createHttpServer, MCP_PATH, SHUTDOWN_GRACE_MS } from "./http.js";
 import { createFmsgMcpServer } from "./server.js";
+import { searchAvailable } from "./search-support.js";
 import { PACKAGE_NAME, VERSION, VERSION_LABEL } from "./version.js";
 
 const USAGE = `${PACKAGE_NAME} ${VERSION} — MCP server for fmsg
@@ -123,8 +124,8 @@ async function main(): Promise<void> {
     };
     const shutdown = new AbortController();
     const handle = serveStdio(async () => {
-      const known = await knownCaller();
-      return createFmsgMcpServer(provider, cfg, { ...known, shutdown: shutdown.signal });
+      const [known, search] = await Promise.all([knownCaller(), searchAvailable(provider, undefined, { exchange: true })]);
+      return createFmsgMcpServer(provider, cfg, { ...known, shutdown: shutdown.signal, search });
     });
     onShutdown(async () => {
       // Let an in-flight wait write its "interrupted" result before the transport closes.

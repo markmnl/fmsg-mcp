@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `search_messages` finds threads by the words in their messages (topic, addresses, attachment names,
+  text body), with filters for unread, attachments, drafts and the trash, newest first and paged. Each
+  result summarises the thread (topic, message and unread counts, participants, newest message) and
+  shows where the words matched; `get_thread` reads it. It uses `GET /fmsg/search`, an optional
+  fmsg Web API endpoint, and is listed only when the Web API implements it: a query with no words is
+  asked once per Web API and the answer kept for 10 minutes; a Web API that can't answer is asked
+  again after a minute, not by every request. Listing tools never starts a token
+  exchange to find out; until it is known the tool is listed, and a refusal (501/404) explains itself.
+  The server instructions point to it when it is listed. `FmsgClient` adds `search()` and
+  `searchSupported()`.
 - Everyone on a reply must already have the message it replies to, whichever host they are on; hosts now
   refuse other replies (409). An add-to batch is a message of its own: the original plus a wider audience.
   So `reply` and `create_draft` with `reply_to` name the batch's hash as the parent when the recipients

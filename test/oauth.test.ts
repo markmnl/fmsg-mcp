@@ -283,7 +283,8 @@ describe("HTTP OAuth", () => {
     expect(response.status).toBe(403);
     expect(response.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
     expect(idp.exchanges).toHaveLength(1);
-    expect(api.requests).toHaveLength(1);
+    // Only the inbox request, not retried (the server may also ask once whether the API implements search).
+    expect(api.requests.filter((r) => !r.path.startsWith("/fmsg/search"))).toHaveLength(1);
   });
 
   it("re-exchanges after upstream 401 and returns 401 if the grant was revoked", async () => {
